@@ -55,12 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller.recoverOnLaunch()
-        // Opened by hand (not at login): show the controls in a window, in case the menu bar icon is hidden.
-        if !launchedAtLogin { controlWindow.show() }
+        // Opened by hand: show the controls in a window, in case the menu bar icon is hidden.
+        if launchedByHand { controlWindow.show() }
     }
 
-    /// Set while launching when macOS opened the app as a login item.
-    private var launchedAtLogin = false
+    /// An ordinary open (Finder, Spotlight, Launchpad), not a login item and not a zweiklang:// URL.
+    private var launchedByHand = true
 
     /// Opened again from Applications, Spotlight or Launchpad while running: the icon may be hidden
     /// behind a full menu bar, so offer the controls in a window.
@@ -70,9 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
-        launchedAtLogin = launchEvent?.eventID == AEEventID(kAEOpenApplication)
-            && launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem)
+        if let launchEvent = NSAppleEventManager.shared().currentAppleEvent {
+            let atLogin = launchEvent.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue
+                == OSType(keyAELaunchedAsLogInItem)
+            launchedByHand = launchEvent.eventID == AEEventID(kAEOpenApplication) && !atLogin
+        }
         // SwiftUI swallows URLs for menu bar apps; take the Apple Event directly.
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleURLEvent(_:withReply:)),

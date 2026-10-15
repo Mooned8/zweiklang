@@ -35,7 +35,8 @@ Install the notarized release. Do not build from source for a normal install, an
    ```
    If any command fails, stop, keep the existing installation and tell the user what failed.
 3. Tell the user, in their language:
-   - An AirPods icon is now in the menu bar.
+   - An AirPods icon is now in the menu bar and a window with the same controls opens. If the icon is hidden (full menu bar), opening Zweiklang again shows that window.
+   - Updates arrive by themselves (daily check, gear menu "Check for updates …").
    - macOS asks once for Bluetooth access: click Allow.
    - Pair both AirPods with the Mac once (System Settings > Bluetooth), take them out of the case, click the menu bar icon, choose both pairs, click "Listen together".
    - For the volume keys: click "Allow …" in the menu, then switch Zweiklang on under System Settings > Privacy & Security > Accessibility. The user does this; agents never change privacy settings themselves.
@@ -47,7 +48,8 @@ Quit the app (its menu, or the `osascript` line above; quitting removes the app'
 ## Development
 
 - Project file is generated: `xcodegen generate` (from `project.yml`). Targets: `ZweiklangCore` (framework: logic, SwiftUI views, translations), `Zweiklang` (app entry), `ZweiklangCoreTests`.
-- `scripts/build-and-install.sh` tests, builds, signs (Developer ID > Apple Development > ad hoc) and installs locally. `scripts/release.sh` produces the notarized `build/Zweiklang.dmg`; `--publish` also creates the GitHub release. Release setup is described at the top of that script.
+- `scripts/build-and-install.sh` tests, builds, signs (Developer ID > Apple Development > ad hoc) and installs locally. `scripts/release.sh` produces the notarized `build/Zweiklang.dmg` and a signed `build/appcast.xml`; `--publish [notes.md]` also creates the GitHub release with both files. Release setup is described at the top of that script. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` (Sparkle compares the build number) in `project.yml` first.
+- Updates: Sparkle 2 (Swift package). Feed `SUFeedURL` = `appcast.xml` of the latest GitHub release; it is signed with the EdDSA key in the maintainer's keychain (account `zweiklang`, public half `SPARKLE_PUBLIC_KEY` in `project.yml`). `scripts/sign.sh` removes Sparkle's XPC services (only needed for sandboxed apps) and signs its helpers before the framework.
 - Tests switch the system sound output for a few seconds (BlackHole 2ch plus the built-in speakers, muted meanwhile) and restore it. They need BlackHole 2ch and Microsoft Teams Audio, otherwise they skip. The three-output test also uses a wired output with a mute control (e.g. a USB DAC), muted meanwhile, and skips without one. Afterwards no device with UID `ch.moritz.zweiklang.*` may be left.
 - Screenshots of the menu in all languages: `TEST_RUNNER_ZWEIKLANG_SNAPSHOT_DIR=<folder> xcodebuild -project Zweiklang.xcodeproj -scheme Zweiklang test -only-testing:ZweiklangCoreTests/SnapshotTests`.
 - Translations: `Sources/ZweiklangCore/Resources/<lang>.lproj/Localizable.strings`, keys are the English texts. Use `L("…")` for strings and `T("…")` for SwiftUI text; only interpolate `String` values (placeholder `%@`). `LocalizationTests` checks that every language has every key with matching placeholders. Bluetooth prompt text: `Sources/Zweiklang/<lang>.lproj/InfoPlist.strings`.

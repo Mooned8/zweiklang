@@ -10,13 +10,16 @@
 - **Volume:** one slider per output, optionally linked. The keyboard volume keys change all outputs at once, with a small on-screen display (also over full-screen video).
 - **Timing:** Zweiklang evens out the delays the devices report, and shows per output how much it adds automatically, how much you added and why. Fine-tune by ear in 5 ms steps; saved per device.
 - **Guests:** when you stop, your friends' AirPods are released so they go back to their iPhones.
+- **Updates:** Zweiklang looks for a new version once a day and installs it with one click (gear icon: "Check for updates …").
 - **Languages:** English, German, Spanish, French, Italian, Dutch and Portuguese, following the Mac's language.
 
 ## Install
 
 1. Download **[Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg)** (latest release).
 2. Open it and drag **Zweiklang** into **Applications**.
-3. Open Zweiklang from Applications. An AirPods icon appears in the menu bar.
+3. Open Zweiklang from Applications. An AirPods icon appears in the menu bar, and a window with the same controls opens.
+
+**Can't see the icon?** On small screens a full menu bar can hide it (for example behind the notch). Open Zweiklang again from Applications or Spotlight: the window with all controls appears.
 
 Requires macOS 14 Sonoma or later, on Apple silicon or Intel. The app is signed and notarized by Apple.
 
@@ -37,7 +40,7 @@ Tell your coding agent (Claude Code, Codex, …):
 On first launch macOS asks whether Zweiklang may use Bluetooth: click **Allow**.
 For the volume keys, click **Allow …** in the menu once and switch Zweiklang on under System Settings > Privacy & Security > Accessibility. The gear icon turns this off if you do not want it.
 
-Shortcuts and Siri can control the app with the URLs `zweiklang://start`, `zweiklang://stop` and `zweiklang://toggle` ("Open URL" action).
+Shortcuts and Siri can control the app with the URLs `zweiklang://open`, `zweiklang://start`, `zweiklang://stop` and `zweiklang://toggle` ("Open URL" action).
 
 ## How many people can listen?
 
@@ -55,6 +58,7 @@ Zweiklang has no fixed limit on outputs. The limit is Bluetooth:
 - When you stop listening together, Zweiklang disconnects your friends' AirPods (every pair after the first in the list) so they can go back to their iPhones (gear icon: "Release guest AirPods when stopping").
 - Don't use the AirPods' microphone during a film: macOS then switches them to lower phone-call quality.
 - macOS already lines up the outputs by the delay each device reports. Bluetooth headphones are often a little later than they report; that rest is what the Timing sliders are for.
+- Updates come from this page and are checked twice: signed by the developer (Sparkle) and notarized by Apple. Version 1.4 and older have no update function yet; install 1.5 once by hand.
 - Your own multi-output devices in Audio MIDI Setup stay untouched. Zweiklang creates its own while you listen together and removes it afterwards.
 
 ## Uninstall
@@ -74,7 +78,7 @@ Details for contributors and AI agents: [AGENTS.md](AGENTS.md).
 
 ## Auf Deutsch
 
-Zweiklang spielt den Ton des Mac gleichzeitig auf mehreren Ausgängen ab, jeder mit eigenem Lautstärkeregler. Gedacht vor allem für zwei AirPods beim gemeinsamen Filmschauen, es geht aber mit allen Ausgängen: Bluetooth-Kopfhörer, Kopfhörer mit Kabel, USB-DACs, Lautsprecher. Ein Zeitabgleich sorgt dafür, dass alle gleichzeitig klingen. Zwei Bluetooth-Kopfhörer laufen zuverlässig, ein drittes Paar kann aussetzen; mehr Leute gehen mit zusätzlichen Kopfhörern am Kabel oder an einem USB-DAC. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac.
+Zweiklang spielt den Ton des Mac gleichzeitig auf mehreren Ausgängen ab, jeder mit eigenem Lautstärkeregler. Gedacht vor allem für zwei AirPods beim gemeinsamen Filmschauen, es geht aber mit allen Ausgängen: Bluetooth-Kopfhörer, Kopfhörer mit Kabel, USB-DACs, Lautsprecher. Ein Zeitabgleich sorgt dafür, dass alle gleichzeitig klingen. Zwei Bluetooth-Kopfhörer laufen zuverlässig, ein drittes Paar kann aussetzen; mehr Leute gehen mit zusätzlichen Kopfhörern am Kabel oder an einem USB-DAC. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac. Siehst du das Symbol in der Menüleiste nicht, öffne Zweiklang nochmals, dann erscheint ein Fenster mit allen Reglern. Neue Versionen holt sich die App selbst (Zahnrad: «Nach Updates suchen …»).
 
 ## License
 
