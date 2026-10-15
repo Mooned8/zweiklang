@@ -35,7 +35,9 @@ final class SnapshotTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        let bluetooth = StubBluetooth()
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.preconnectEnabled = false // calm, repeatable pictures
         let options = AppOptions(defaults: defaults, controller: controller)
         let menu = MenuContentView(controller: controller, options: options, onQuit: {})
         try render(menu, to: "1-bereit.png", in: directory)
@@ -46,6 +48,17 @@ final class SnapshotTests: XCTestCase {
         controller.connectTimeout = 0.1
         await controller.start()
         try render(menu, to: "2-fehler.png", in: directory)
+
+        // Bluetooth link without sound: AirPods in the case, with battery.
+        controller.dismissMessage()
+        bluetooth.linkComes = true
+        controller.audioAppearTimeout = 0.1
+        controller.preconnectEnabled = true
+        controller.menuOpened()
+        let deadline = Date().addingTimeInterval(3)
+        while controller.slotBattery.contains(nil), Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        controller.preconnectEnabled = false
+        try render(menu, to: "2b-im-case.png", in: directory)
 
         // Active session on BlackHole + muted speakers, named like the real AirPods.
         let a = try XCTUnwrap(AudioSystem.device(uid: VirtualDevices.first))

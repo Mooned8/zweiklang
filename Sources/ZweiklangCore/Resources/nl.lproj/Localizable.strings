@@ -51,3 +51,22 @@
 "+%@ ms added automatically" = "+%@ ms automatisch toegevoegd";
 "Volume keys control all outputs" = "Volumetoetsen regelen alle uitvoer";
 "Not available: %@. Check that the outputs are connected and switched on." = "Niet beschikbaar: %@. Controleer of de uitvoerapparaten zijn aangesloten en aanstaan.";
+
+/* Connecting, status and battery */
+"Connecting …" = "Verbinden …";
+"Reconnecting (%@ of %@) …" = "Opnieuw verbinden (%1$@ van %2$@) …";
+"In the case" = "In de case";
+"Not reachable" = "Niet bereikbaar";
+"Not available" = "Niet beschikbaar";
+"Bluetooth is connected, but there is no sound yet. Take the AirPods out of the case." = "Bluetooth is verbonden, maar er is nog geen geluid. Haal de AirPods uit de case.";
+"Switched off, too far away or playing on another device." = "Uitgeschakeld, te ver weg of in gebruik op een ander apparaat.";
+"Left %@" = "Links %@";
+"Right %@" = "Rechts %@";
+"Battery %@" = "Batterij %@";
+"Case %@" = "Case %@";
+"Connect when the menu opens" = "Verbinden bij openen van het menu";
+"Release guest AirPods when stopping" = "AirPods van de gast vrijgeven bij stoppen";
+"Pair new AirPods …" = "Nieuwe AirPods koppelen …";
+"Put both AirPods in the case, open the lid and hold the button on the back until the light flashes white (AirPods 4 and AirPods Pro 3: double-tap the front of the case). Then click Connect next to them in Bluetooth settings." = "Leg beide AirPods in de case, open het deksel en houd de knop achterop ingedrukt tot het lampje wit knippert (AirPods 4 en AirPods Pro 3: tik twee keer op de voorkant van de case). Klik dan in de Bluetooth-instellingen naast ze op Verbind.";
+"Open Bluetooth settings" = "Open Bluetooth-instellingen";
+"“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "“%@” kon niet automatisch worden teruggehaald. Misschien spelen ze af op een ander apparaat, zoals een iPhone.";

@@ -64,6 +64,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var isQuitting = false
+
+    /// Quitting waits (briefly) until the guest AirPods are released: macOS drops the link only while the app runs.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isQuitting else { return .terminateNow } // asked again while waiting: quit right away
+        isQuitting = true
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        Task { @MainActor in
+            await self.controller.prepareForQuit()
+            reply()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { reply() } // never let a stuck release block quitting
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         controller.stop() // also cancels a start in progress
     }

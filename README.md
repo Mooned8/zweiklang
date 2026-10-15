@@ -28,7 +28,7 @@ Tell your coding agent (Claude Code, Codex, …):
 
 ## How to use
 
-1. Pair both AirPods with the Mac once (System Settings > Bluetooth). Your friend's AirPods only need this the first time.
+1. Pair both AirPods with the Mac once (System Settings > Bluetooth, or **Pair new AirPods …** in the headphone list). Your friend's AirPods only need this the first time.
 2. Take both pairs out of their cases.
 3. Click the AirPods icon in the menu bar, pick the two pairs and click **Listen together**. **Add output** adds more headphones or speakers.
 4. Adjust each output with its slider. **Stop listening together** ends it.
@@ -42,7 +42,9 @@ Shortcuts and Siri can control the app with the URLs `zweiklang://start`, `zweik
 ## Good to know
 
 - AirPods in their closed case cannot play sound. Take them out before you start.
-- AirPods switch automatically between Apple devices. If your friend's iPhone starts playing something, their AirPods may jump back to it; click **Reconnect** in the menu.
+- When the menu opens, Zweiklang connects the chosen AirPods in the background, so listening starts at once. Below each pair it shows whether it is connected, still in the case or not reachable, and its battery. This can pull your friend's AirPods away from their iPhone; the gear icon switches it off ("Connect when the menu opens").
+- AirPods switch automatically between Apple devices. If your friend's iPhone starts playing something, their AirPods may jump back to it; Zweiklang fetches them back up to three times, then shows **Reconnect**.
+- When you stop listening together, Zweiklang disconnects your friends' AirPods (every pair after the first in the list) so they can go back to their iPhones (gear icon: "Release guest AirPods when stopping").
 - Don't use the AirPods' microphone during a film: macOS then switches them to lower phone-call quality.
 - More than two Bluetooth headphones on one Mac can cause dropouts: they share one Bluetooth radio.
 - macOS already lines up the outputs by the delay each device reports. Bluetooth headphones are often a little later than they report; that rest is what the Timing sliders are for.

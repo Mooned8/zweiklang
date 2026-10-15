@@ -51,3 +51,22 @@
 "+%@ ms added automatically" = "+%@ ms ajoutées automatiquement";
 "Volume keys control all outputs" = "Les touches de volume règlent toutes les sorties";
 "Not available: %@. Check that the outputs are connected and switched on." = "Indisponible : %@. Vérifiez que les sorties sont branchées et allumées.";
+
+/* Connecting, status and battery */
+"Connecting …" = "Connexion …";
+"Reconnecting (%@ of %@) …" = "Reconnexion (%1$@ sur %2$@) …";
+"In the case" = "Dans le boîtier";
+"Not reachable" = "Injoignables";
+"Not available" = "Non disponible";
+"Bluetooth is connected, but there is no sound yet. Take the AirPods out of the case." = "Le Bluetooth est connecté, mais il n’y a pas encore de son. Sortez les AirPods du boîtier.";
+"Switched off, too far away or playing on another device." = "Éteints, trop loin ou en lecture sur un autre appareil.";
+"Left %@" = "Gauche %@";
+"Right %@" = "Droite %@";
+"Battery %@" = "Batterie %@";
+"Case %@" = "Boîtier %@";
+"Connect when the menu opens" = "Connecter à l’ouverture du menu";
+"Release guest AirPods when stopping" = "Libérer les AirPods de l’invité à la fin";
+"Pair new AirPods …" = "Jumeler de nouveaux AirPods …";
+"Put both AirPods in the case, open the lid and hold the button on the back until the light flashes white (AirPods 4 and AirPods Pro 3: double-tap the front of the case). Then click Connect next to them in Bluetooth settings." = "Placez les deux AirPods dans le boîtier, ouvrez le couvercle et maintenez le bouton au dos jusqu’à ce que le voyant clignote en blanc (AirPods 4 et AirPods Pro 3 : touchez deux fois l’avant du boîtier). Cliquez ensuite sur Se connecter à côté d’eux dans les réglages Bluetooth.";
+"Open Bluetooth settings" = "Ouvrir les réglages Bluetooth";
+"“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "Impossible de récupérer « %@ » automatiquement. Ils sont peut-être en lecture sur un autre appareil, par exemple un iPhone.";

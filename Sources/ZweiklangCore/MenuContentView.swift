@@ -7,6 +7,7 @@ public struct MenuContentView: View {
     let options: AppOptions
     let onQuit: () -> Void
     @State private var showsTiming = false
+    @State private var showsPairingHelp = false
 
     public init(controller: SessionController, options: AppOptions, onQuit: @escaping () -> Void) {
         self.init(controller: controller, options: options, onQuit: onQuit, showsTiming: false)
@@ -43,7 +44,7 @@ public struct MenuContentView: View {
         .padding(16)
         .frame(width: 300)
         .onAppear {
-            controller.refresh()
+            controller.menuOpened()
             options.refresh()
         }
     }
@@ -81,6 +82,16 @@ public struct MenuContentView: View {
                 Notice(text: L("More than two Bluetooth headphones on one Mac can cause dropouts."),
                        systemImage: "antenna.radiowaves.left.and.right")
             }
+            if showsPairingHelp {
+                Notice(
+                    text: L("Put both AirPods in the case, open the lid and hold the button on the back until the light flashes white (AirPods 4 and AirPods Pro 3: double-tap the front of the case). Then click Connect next to them in Bluetooth settings."),
+                    systemImage: "plus.circle",
+                    action: (L("Open Bluetooth settings"), {
+                        showsPairingHelp = false
+                        openBluetoothSettings()
+                    })
+                )
+            }
             if case .failed(let message) = controller.phase {
                 Notice(text: message, systemImage: "exclamationmark.triangle.fill")
             }
@@ -109,17 +120,23 @@ public struct MenuContentView: View {
     }
 
     private func slotRow(_ slot: Int) -> some View {
-        HStack(spacing: 6) {
-            slotPicker(slot)
-            if controller.targets.count > SessionController.minimumSlots {
-                Button { controller.removeOutput(slot: slot) } label: {
-                    Image(systemName: "minus.circle")
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                slotPicker(slot)
+                if controller.targets.count > SessionController.minimumSlots {
+                    Button { controller.removeOutput(slot: slot) } label: {
+                        Image(systemName: "minus.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!controller.canEditOutputs)
+                    .help(T("Remove output"))
+                    .accessibilityLabel(T("Remove output"))
                 }
-                .buttonStyle(.borderless)
-                .disabled(!controller.canEditOutputs)
-                .help(T("Remove output"))
-                .accessibilityLabel(T("Remove output"))
+            }
+            if controller.targets[slot] != nil {
+                PairStatusLine(status: controller.slotStatus[slot], battery: controller.slotBattery[slot])
+                    .padding(.leading, 10)
             }
         }
     }
@@ -143,6 +160,8 @@ public struct MenuContentView: View {
                     T("Other outputs")
                 }
             }
+            if !addable.isEmpty { Divider() }
+            Button { showsPairingHelp = true } label: { T("Pair new AirPods …") }
         } label: {
             Label { T("Add output") } icon: { Image(systemName: "plus") }
                 .font(.callout)
@@ -150,11 +169,12 @@ public struct MenuContentView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .disabled(addable.isEmpty || !controller.canEditOutputs)
+        .disabled(!controller.canEditOutputs)
     }
 
     private func slotPicker(_ slot: Int) -> some View {
         let connected = controller.slotDevices[slot] != nil
+        let status = controller.slotStatus[slot]
         let selection = Binding<String?>(
             get: { controller.targets[slot]?.id },
             set: { id in controller.select(controller.candidates.first { $0.id == id }, slot: slot) }
@@ -184,10 +204,12 @@ public struct MenuContentView: View {
             }
             .pickerStyle(.inline)
             .labelsHidden()
+            Divider()
+            Button { showsPairingHelp = true } label: { T("Pair new AirPods …") }
         } label: {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(connected ? Color.green : Color.secondary.opacity(0.35))
+                    .fill(status.color)
                     .frame(width: 7, height: 7)
                 (controller.targets[slot].map { Text(verbatim: $0.name) } ?? T("Please choose"))
                     .lineLimit(1)
@@ -207,9 +229,12 @@ public struct MenuContentView: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .disabled(controller.isBusy)
-        .help(connected ? T("Connected") : T("Not connected"))
         .accessibilityLabel(Text(verbatim: controller.displayName(slot: slot)))
-        .accessibilityValue(connected ? T("Connected") : T("Not connected"))
+        .accessibilityValue(connected ? T("Connected") : Text(verbatim: status.title ?? L("Not connected")))
+    }
+
+    private func openBluetoothSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { NSWorkspace.shared.open(url) }
     }
 
     // MARK: Active session
@@ -264,6 +289,7 @@ public struct MenuContentView: View {
             HStack {
                 Text(verbatim: controller.displayName(slot: slot)).lineLimit(1).truncationMode(.middle)
                 Spacer()
+                if let battery = controller.slotBattery[slot] { BatteryBadge(level: battery) }
                 if connected {
                     (controller.isMuted ? T("muted") : Text(verbatim: "\(Int((controller.volumes[slot] * 100).rounded())) %"))
                         .monospacedDigit()
@@ -278,10 +304,14 @@ public struct MenuContentView: View {
                 }
                 .disabled(!controller.slotHasVolume[slot])
             } else {
+                let status = controller.slotStatus[slot]
                 HStack {
-                    T("Disconnected").font(.callout).foregroundStyle(.orange)
+                    Text(verbatim: status.title ?? L("Disconnected"))
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .help(Text(verbatim: status.explanation ?? ""))
                     Spacer()
-                    if controller.isReconnecting {
+                    if controller.isReconnecting || status.isWorking {
                         ProgressView().controlSize(.small)
                     } else {
                         Button { Task { await controller.start() } } label: { T("Reconnect") }
@@ -376,6 +406,9 @@ public struct MenuContentView: View {
                     get: { options.mediaKeysEnabled },
                     set: { options.setMediaKeysEnabled($0) }
                 )) { T("Volume keys control all outputs") }
+                Toggle(isOn: $controller.preconnectEnabled) { T("Connect when the menu opens") }
+                Toggle(isOn: $controller.releaseGuestOnStop) { T("Release guest AirPods when stopping") }
+                Divider()
                 Toggle(isOn: Binding(
                     get: { options.launchAtLogin },
                     set: { options.setLaunchAtLogin($0) }
@@ -414,5 +447,111 @@ private struct Notice: View {
         }
         .padding(10)
         .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// "Connected", "In the case" … below a pair, with its battery.
+private struct PairStatusLine: View {
+    let status: PairStatus
+    let battery: BatteryLevel?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if status.isWorking { ProgressView().controlSize(.mini) }
+            if let title = status.title {
+                Text(verbatim: title)
+                    .font(.caption)
+                    .foregroundStyle(status.textColor)
+                    .help(Text(verbatim: status.explanation ?? ""))
+            }
+            Spacer(minLength: 0)
+            if let battery { BatteryBadge(level: battery) }
+        }
+    }
+}
+
+/// Battery symbol with the earbud that runs out first; details in the tooltip.
+private struct BatteryBadge: View {
+    let level: BatteryLevel
+
+    var body: some View {
+        if let lowest = level.lowest {
+            HStack(spacing: 3) {
+                Image(systemName: symbol(lowest))
+                Text(verbatim: "\(lowest) %").monospacedDigit()
+            }
+            .font(.caption)
+            .foregroundStyle(lowest <= 15 ? Color.orange : .secondary)
+            .help(Text(verbatim: details))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: details))
+        }
+    }
+
+    private var details: String {
+        var parts: [String] = []
+        if let left = level.left { parts.append(L("Left \("\(left) %")")) }
+        if let right = level.right { parts.append(L("Right \("\(right) %")")) }
+        if let main = level.main, level.left == nil, level.right == nil { parts.append(L("Battery \("\(main) %")")) }
+        if let chargingCase = level.chargingCase { parts.append(L("Case \("\(chargingCase) %")")) }
+        return parts.joined(separator: ", ")
+    }
+
+    private func symbol(_ percent: Int) -> String {
+        switch percent {
+        case ..<13: "battery.0percent"
+        case ..<38: "battery.25percent"
+        case ..<63: "battery.50percent"
+        case ..<88: "battery.75percent"
+        default: "battery.100percent"
+        }
+    }
+}
+
+extension PairStatus {
+    /// Text below the pair; nil where the picker says enough.
+    var title: String? {
+        switch self {
+        case .none: nil
+        case .connected: L("Connected")
+        case .connecting: L("Connecting …")
+        case .reconnecting(let attempt, let count): L("Reconnecting (\(String(attempt)) of \(String(count))) …")
+        case .inCase: L("In the case")
+        case .unreachable: L("Not reachable")
+        case .notConnected: L("Not connected")
+        case .unavailable: L("Not available")
+        }
+    }
+
+    /// Tooltip with what the status means and what helps.
+    var explanation: String? {
+        switch self {
+        case .inCase: L("Bluetooth is connected, but there is no sound yet. Take the AirPods out of the case.")
+        case .unreachable: L("Switched off, too far away or playing on another device.")
+        default: nil
+        }
+    }
+
+    var isWorking: Bool {
+        switch self {
+        case .connecting, .reconnecting: true
+        default: false
+        }
+    }
+
+    var textColor: Color {
+        switch self {
+        case .connected, .none, .notConnected: .secondary
+        default: color
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .connected: .green
+        case .connecting, .reconnecting: .accentColor
+        case .inCase, .unreachable, .unavailable: .orange
+        case .none, .notConnected: Color.secondary.opacity(0.35)
+        }
     }
 }

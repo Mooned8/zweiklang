@@ -25,6 +25,66 @@ final class BluetoothAddressTests: XCTestCase {
     }
 }
 
+final class BatteryReportTests: XCTestCase {
+    /// Shape of `system_profiler -json SPBluetoothDataType` on macOS 26, addresses made up.
+    private let sample = Data("""
+    {"SPBluetoothDataType": [{
+      "controller_properties": {"controller_state": "attrib_on"},
+      "device_connected": [
+        {"Anna’s AirPods Pro": {"device_address": "74:15:F5:00:00:01", "device_batteryLevelCase": "40%",
+                                "device_batteryLevelLeft": "100%", "device_batteryLevelRight": "98%"}},
+        {"AirPods Max": {"device_address": "74:15:F5:00:00:02", "device_batteryLevelMain": "55%"}},
+        {"MX Keys": {"device_address": "74:15:F5:00:00:03"}},
+        {"Odd": {"device_address": "74:15:F5:00:00:04", "device_batteryLevelLeft": "n/a"}}
+      ],
+      "device_not_connected": [
+        {"Ben’s AirPods": {"device_address": "74:15:F5:00:00:05", "device_batteryLevelLeft": "80%"}}
+      ]
+    }]}
+    """.utf8)
+
+    func testReadsEarbudsCaseAndSingleBatteries() {
+        let levels = BatteryReport.parse(sample)
+        XCTAssertEqual(levels["7415f5000001"], BatteryLevel(left: 100, right: 98, chargingCase: 40))
+        XCTAssertEqual(levels["7415f5000001"]?.lowest, 98)
+        XCTAssertEqual(levels["7415f5000002"]?.lowest, 55)
+        XCTAssertNil(levels["7415f5000003"]) // no battery reported
+        XCTAssertNil(levels["7415f5000004"]) // unreadable value
+        XCTAssertNil(levels["7415f5000005"]) // not connected: stale values are ignored
+    }
+
+    func testUnexpectedOutputGivesNothing() {
+        XCTAssertEqual(BatteryReport.parse(Data("not json".utf8)), [:])
+        XCTAssertEqual(BatteryReport.parse(Data("{\"SPBluetoothDataType\": {}}".utf8)), [:])
+        XCTAssertNil(BatteryReport.percent("140%"))
+        XCTAssertEqual(BatteryReport.percent("7 %"), 7)
+    }
+}
+
+final class ReconnectPolicyTests: XCTestCase {
+    func testBudgetEndsTheTugOfWarAndRefillsAfterAStablePeriod() {
+        var policy = ReconnectPolicy(delays: [3, 10, 30], refillAfter: 300)
+        let start = Date()
+        policy.pairPresent(at: start)
+        XCTAssertTrue(policy.pairLost(at: start.addingTimeInterval(10)))
+        XCTAssertEqual(policy.nextDelay, 3)
+        XCTAssertEqual(policy.takeAttempt(), 1)
+        XCTAssertEqual(policy.nextDelay, 10)
+        XCTAssertEqual(policy.takeAttempt(), 2)
+        // Back for a short while only: the budget is not refilled.
+        policy.pairPresent(at: start.addingTimeInterval(60))
+        XCTAssertTrue(policy.pairLost(at: start.addingTimeInterval(90)))
+        XCTAssertEqual(policy.takeAttempt(), 3)
+        XCTAssertNil(policy.nextDelay)
+        XCTAssertNil(policy.takeAttempt())
+        XCTAssertFalse(policy.pairLost(at: start.addingTimeInterval(100)))
+        // Five quiet minutes later it may try again.
+        policy.pairPresent(at: start.addingTimeInterval(200))
+        XCTAssertTrue(policy.pairLost(at: start.addingTimeInterval(501)))
+        XCTAssertEqual(policy.nextDelay, 3)
+    }
+}
+
 final class OutputTargetTests: XCTestCase {
     private func device(uid: String, channels: Int = 2, transport: UInt32 = kAudioDeviceTransportTypeBluetooth) -> AudioDevice {
         AudioDevice(id: 1, uid: uid, name: "x", transportType: transport, outputChannels: channels)
@@ -140,6 +200,7 @@ final class CoreAudioTests: XCTestCase {
         XCTAssertTrue(device.isAggregate)
         XCTAssertTrue(MultiOutputDevice.isStacked(device.id))
         XCTAssertEqual(MultiOutputDevice.subDeviceUIDs(device.id), [a.uid, b.uid])
+        XCTAssertEqual(Set(MultiOutputDevice.activeSubDeviceUIDs(device.id)), [a.uid, b.uid])
         // Multi-output: every sub-device gets the same stream, so the device has as many
         // channels as its widest member (2), not the sum (3) as a combining aggregate would.
         XCTAssertEqual(device.outputChannels, max(a.outputChannels, b.outputChannels))
@@ -182,27 +243,70 @@ final class CoreAudioTests: XCTestCase {
 @MainActor
 final class StubBluetooth: BluetoothProviding {
     var connectCalls: [String] = []
+    var disconnectCalls: [String] = []
+    /// What `connect` reports; with `true` the link counts as up (like AirPods in the case).
+    var linkComes = false
+    var linkedAddresses: Set<String> = []
+    var onLinkChange: (() -> Void)?
     func pairedHeadphones() -> [BluetoothHeadphone] {
         [BluetoothHeadphone(address: "AA-BB-CC-DD-EE-01", name: "AirPods Test A"),
          BluetoothHeadphone(address: "AA-BB-CC-DD-EE-02", name: "AirPods Test B")]
     }
     func connect(address: String, timeout: TimeInterval) async -> Bool {
         connectCalls.append(address)
-        return false
+        if linkComes { linkedAddresses.insert(address) }
+        return linkComes
+    }
+    func isConnected(address: String) -> Bool { linkedAddresses.contains(address) }
+    func disconnect(address: String, timeout: TimeInterval) async -> Bool {
+        disconnectCalls.append(address)
+        linkedAddresses.remove(address)
+        return true
+    }
+    func batteryLevels() async -> [String: BatteryLevel] {
+        Dictionary(uniqueKeysWithValues: linkedAddresses.map { (BluetoothAddress.normalized($0), BatteryLevel(left: 80, right: 75, chargingCase: 40)) })
     }
 }
 
-/// Holds the first connect call open until the test releases it.
+/// Holds connect calls open until the test releases them.
 @MainActor
 final class SuspendingBluetooth: BluetoothProviding {
-    private var held: CheckedContinuation<Bool, Never>?
+    private var held: [CheckedContinuation<Bool, Never>] = []
+    /// Hold every call, not only the first one.
+    var holdsAll = false
+    var connectCalls: [String] = []
+    var disconnectCalls: [String] = []
+    private var heldAddresses: [String] = []
+    /// Links that came up when the held calls were released.
+    private(set) var linked: Set<String> = []
+    var onLinkChange: (() -> Void)?
     func pairedHeadphones() -> [BluetoothHeadphone] { StubBluetooth().pairedHeadphones() }
     func connect(address: String, timeout: TimeInterval) async -> Bool {
-        await withCheckedContinuation { continuation in
-            if held == nil { held = continuation } else { continuation.resume(returning: false) }
+        connectCalls.append(address)
+        return await withCheckedContinuation { continuation in
+            if held.isEmpty || holdsAll {
+                held.append(continuation)
+                heldAddresses.append(address)
+            } else {
+                continuation.resume(returning: false)
+            }
         }
     }
-    func release() { held?.resume(returning: true); held = nil }
+    func isConnected(address: String) -> Bool { linked.contains(address) }
+    func disconnect(address: String, timeout: TimeInterval) async -> Bool {
+        disconnectCalls.append(address)
+        linked.remove(address)
+        return true
+    }
+    func batteryLevels() async -> [String: BatteryLevel] { [:] }
+    /// The held connections succeed, like a slow native connection that finishes after all.
+    func release() {
+        linked.formUnion(heldAddresses)
+        held.forEach { $0.resume(returning: true) }
+        held = []
+        heldAddresses = []
+        onLinkChange?()
+    }
 }
 
 @MainActor
@@ -560,6 +664,290 @@ final class SessionControllerTests: XCTestCase {
         guard case .failed = controller.phase else { return XCTFail("expected failure, got \(controller.phase)") }
         XCTAssertNil(AudioSystem.device(uid: testUID))
         XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), outputBefore)
+    }
+
+    // MARK: Connecting without a session
+
+    private func waitUntil(_ timeout: TimeInterval = 5, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
+
+    func testOpeningTheMenuConnectsTheChosenPairsAndReportsUnreachableOnes() async {
+        let bluetooth = StubBluetooth()
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.unlinkedGrace = 0.1
+        XCTAssertEqual(controller.slotStatus, [.notConnected, .notConnected])
+        controller.menuOpened()
+        XCTAssertEqual(controller.slotStatus, [.connecting, .connecting])
+        await waitUntil { !controller.slotStatus.contains(.connecting) }
+        XCTAssertEqual(controller.slotStatus, [.unreachable, .unreachable])
+        XCTAssertEqual(Set(bluetooth.connectCalls), ["AA-BB-CC-DD-EE-01", "AA-BB-CC-DD-EE-02"])
+        XCTAssertEqual(controller.phase, .idle)
+    }
+
+    func testLinkWithoutSoundCountsAsInTheCaseWithBattery() async {
+        let bluetooth = StubBluetooth()
+        bluetooth.linkComes = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.audioAppearTimeout = 0.1
+        controller.menuOpened()
+        await waitUntil { controller.slotStatus == [.inCase, .inCase] && !controller.slotBattery.contains(nil) }
+        XCTAssertEqual(controller.slotStatus, [.inCase, .inCase])
+        XCTAssertEqual(controller.slotBattery[0]?.lowest, 75)
+    }
+
+    func testPreconnectCanBeSwitchedOff() async throws {
+        let bluetooth = StubBluetooth()
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.preconnectEnabled = false
+        controller.menuOpened()
+        controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(bluetooth.connectCalls, [])
+        // The choice survives a relaunch.
+        XCTAssertFalse(SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID).preconnectEnabled)
+    }
+
+    func testStartJoinsTheRunningPreconnectInsteadOfConnectingTwice() async throws {
+        let bluetooth = SuspendingBluetooth()
+        bluetooth.holdsAll = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.audioAppearTimeout = 0.1
+        controller.menuOpened()
+        await waitUntil { bluetooth.connectCalls.count == 2 }
+        XCTAssertEqual(bluetooth.connectCalls.count, 2)
+        let start = Task { await controller.start() }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(controller.isWorking)
+        XCTAssertEqual(bluetooth.connectCalls.count, 2)
+        bluetooth.release()
+        await start.value
+        guard case .failed = controller.phase else { return XCTFail("expected failure, got \(controller.phase)") }
+        XCTAssertEqual(bluetooth.connectCalls.count, 2)
+        XCTAssertNil(AudioSystem.device(uid: testUID))
+    }
+
+    func testStopCancelsAPreconnect() async throws {
+        let bluetooth = SuspendingBluetooth()
+        bluetooth.holdsAll = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.menuOpened()
+        XCTAssertEqual(controller.slotStatus, [.connecting, .connecting])
+        controller.stop()
+        XCTAssertEqual(controller.slotStatus, [.notConnected, .notConnected])
+        bluetooth.release()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(controller.slotStatus, [.notConnected, .notConnected])
+    }
+
+    // MARK: During and after a session
+
+    /// A real session on BlackHole and the muted built-in speakers; everything is restored afterwards.
+    private func withVirtualSession(_ bluetooth: BluetoothProviding, prepare: (SessionController) -> Void = { _ in },
+                                    _ body: (SessionController) async throws -> Void) async throws {
+        let (a, _) = try VirtualDevices.require()
+        let b = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
+        let speakerMute = propertyAddress(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
+        let speakerMuteBefore = try XCTUnwrap(HAL.value(b.id, speakerMute, initial: UInt32(0)))
+        try HAL.setValue(b.id, speakerMute, UInt32(1), operation: "mute speakers")
+        let outputBefore = try XCTUnwrap(AudioSystem.defaultOutputDeviceID())
+        let volumesBefore = [Volume.get(a.id), Volume.get(b.id)]
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        defer {
+            controller.stop()
+            if AudioSystem.defaultOutputDeviceID() != outputBefore { try? AudioSystem.setDefaultOutputDevice(outputBefore) }
+            if let v = volumesBefore[0] { try? Volume.set(v, on: a.id) }
+            if let v = volumesBefore[1] { try? Volume.set(v, on: b.id) }
+            try? HAL.setValue(b.id, speakerMute, speakerMuteBefore, operation: "restore speaker mute")
+        }
+        controller.select(OutputTarget(name: a.name, deviceUID: a.uid), slot: 0)
+        controller.select(OutputTarget(name: b.name, deviceUID: b.uid), slot: 1)
+        prepare(controller)
+        await controller.start()
+        XCTAssertEqual(controller.phase, .active)
+        try await body(controller)
+    }
+
+    func testDroppedPairIsFetchedBackAutomaticallyWithinItsBudget() async throws {
+        let bluetooth = StubBluetooth()
+        try await withVirtualSession(bluetooth, prepare: {
+            $0.unlinkedGrace = 0.05
+            $0.reconnectDelays = [0.05, 0.05, 0.05]
+        }) { controller in
+            let aggregate = try XCTUnwrap(AudioSystem.device(uid: testUID))
+            // Slot 2 becomes a pair that cannot be reached, then drops out.
+            controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+            await controller.start() // fresh budget: a manual reconnect, which fails and only shows a notice
+            controller.dismissMessage()
+            bluetooth.connectCalls = []
+            controller.pairLost(1)
+            XCTAssertEqual(controller.slotStatus[1], .reconnecting(attempt: 1, of: 3))
+            await waitUntil { controller.message != nil }
+            XCTAssertEqual(bluetooth.connectCalls, Array(repeating: "AA-BB-CC-DD-EE-02", count: 3))
+            XCTAssertEqual(controller.phase, .active)
+            XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), aggregate.id)
+            XCTAssertTrue(controller.message?.contains("AirPods Test B") == true, controller.message ?? "")
+            XCTAssertEqual(controller.slotStatus[1], .unreachable)
+            // Budget used up: another drop-out right away does not try again.
+            controller.pairLost(1)
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertEqual(bluetooth.connectCalls.count, 3)
+        }
+    }
+
+    func testStopEndsAutomaticReconnecting() async throws {
+        let bluetooth = StubBluetooth()
+        try await withVirtualSession(bluetooth) { controller in
+            controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+            controller.pairLost(1)
+            XCTAssertEqual(controller.slotStatus[1], .reconnecting(attempt: 1, of: 3))
+            controller.stop()
+            try await Task.sleep(nanoseconds: 200_000_000)
+            XCTAssertEqual(bluetooth.connectCalls, [])
+            XCTAssertEqual(controller.phase, .idle)
+        }
+    }
+
+    func testStopReleasesTheGuestPairOnlyAfterASessionAndWhenWanted() async throws {
+        let bluetooth = StubBluetooth()
+        try await withVirtualSession(bluetooth) { controller in
+            // The guest pair: Bluetooth, link up, after the owner's pair (the first Bluetooth pair).
+            bluetooth.linkedAddresses = ["AA-BB-CC-DD-EE-02"]
+            controller.select(OutputTarget(name: "AirPods Test A", bluetoothAddress: "AA-BB-CC-DD-EE-01"), slot: 0)
+            controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+            await controller.prepareForQuit()
+            XCTAssertEqual(bluetooth.disconnectCalls, ["AA-BB-CC-DD-EE-02"])
+            XCTAssertEqual(controller.phase, .idle)
+            // Opening the menu afterwards does not pull the released pair back.
+            bluetooth.connectCalls = []
+            controller.menuOpened()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertFalse(bluetooth.connectCalls.contains("AA-BB-CC-DD-EE-02"))
+
+            // No session: nothing to release.
+            bluetooth.linkedAddresses = ["AA-BB-CC-DD-EE-02"]
+            await controller.prepareForQuit()
+            XCTAssertEqual(bluetooth.disconnectCalls.count, 1)
+        }
+        // Option off.
+        let keep = StubBluetooth()
+        try await withVirtualSession(keep) { controller in
+            controller.releaseGuestOnStop = false
+            keep.linkedAddresses = ["AA-BB-CC-DD-EE-02"]
+            controller.select(OutputTarget(name: "AirPods Test A", bluetoothAddress: "AA-BB-CC-DD-EE-01"), slot: 0)
+            controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+            await controller.prepareForQuit()
+            XCTAssertEqual(keep.disconnectCalls, [])
+            controller.releaseGuestOnStop = true
+        }
+    }
+
+    func testGuestPairThatLinksUpOnlyAfterStopIsReleasedToo() async throws {
+        let bluetooth = SuspendingBluetooth()
+        bluetooth.holdsAll = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.preconnectEnabled = false
+        controller.audioAppearTimeout = 0.1
+        let start = Task { await controller.start() }
+        await waitUntil { bluetooth.connectCalls.count == 2 }
+        controller.stop()
+        bluetooth.release() // the native connections finish after Stop
+        await start.value
+        await waitUntil { !bluetooth.disconnectCalls.isEmpty }
+        XCTAssertEqual(bluetooth.disconnectCalls, ["AA-BB-CC-DD-EE-02"])
+        XCTAssertEqual(controller.phase, .idle)
+    }
+
+    func testChoosingTheGuestPairAgainKeepsItsLateConnection() async throws {
+        let bluetooth = SuspendingBluetooth()
+        bluetooth.holdsAll = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.preconnectEnabled = false
+        controller.audioAppearTimeout = 0.1
+        let start = Task { await controller.start() }
+        await waitUntil { bluetooth.connectCalls.count == 2 }
+        controller.stop()
+        controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 1)
+        bluetooth.release()
+        await start.value
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(bluetooth.disconnectCalls, [])
+    }
+
+    // MARK: More than two outputs
+
+    func testStatusAndBatteryCoverEveryOutput() async {
+        let bluetooth = StubBluetooth()
+        bluetooth.linkComes = true
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.audioAppearTimeout = 0.1
+        // An added pair is connected right away, like a chosen one.
+        controller.addOutput(OutputTarget(name: "AirPods Test C", bluetoothAddress: "AA-BB-CC-DD-EE-03"))
+        XCTAssertEqual(controller.slotStatus[2], .connecting)
+        controller.menuOpened()
+        await waitUntil { controller.slotStatus == [.inCase, .inCase, .inCase] && !controller.slotBattery.contains(nil) }
+        XCTAssertEqual(controller.slotStatus, [.inCase, .inCase, .inCase])
+        XCTAssertEqual(controller.slotBattery[2]?.lowest, 75)
+        XCTAssertEqual(Set(bluetooth.connectCalls), ["AA-BB-CC-DD-EE-01", "AA-BB-CC-DD-EE-02", "AA-BB-CC-DD-EE-03"])
+
+        controller.addOutput(OutputTarget(name: "Speakers", deviceUID: "BuiltInSpeakerDevice"))
+        XCTAssertEqual(controller.slotStatus[3], .connected)
+        XCTAssertNil(controller.slotBattery[3])
+        controller.removeOutput(slot: 0)
+        XCTAssertEqual(controller.slotStatus, [.inCase, .inCase, .connected])
+        XCTAssertEqual(controller.slotBattery.map { $0 != nil }, [true, true, false])
+    }
+
+    func testEveryBluetoothPairAfterTheFirstIsReleasedAsAGuest() async throws {
+        let bluetooth = StubBluetooth()
+        try await withVirtualSession(bluetooth, prepare: { controller in
+            // Two empty extra slots, filled with pairs while the session runs.
+            controller.addOutput(OutputTarget(name: "Spare 1", deviceUID: "spare-1"))
+            controller.addOutput(OutputTarget(name: "Spare 2", deviceUID: "spare-2"))
+            controller.select(nil, slot: 2)
+            controller.select(nil, slot: 3)
+        }) { controller in
+            bluetooth.linkedAddresses = ["AA-BB-CC-DD-EE-01", "AA-BB-CC-DD-EE-02", "AA-BB-CC-DD-EE-03"]
+            // A wired output first: the owner's pair is the first Bluetooth pair, wherever it is.
+            controller.select(OutputTarget(name: "AirPods Test A", bluetoothAddress: "AA-BB-CC-DD-EE-01"), slot: 1)
+            controller.select(OutputTarget(name: "AirPods Test B", bluetoothAddress: "AA-BB-CC-DD-EE-02"), slot: 2)
+            controller.select(OutputTarget(name: "AirPods Test C", bluetoothAddress: "AA-BB-CC-DD-EE-03"), slot: 3)
+            XCTAssertEqual(controller.slotStatus.count, 4)
+            await controller.prepareForQuit()
+            XCTAssertEqual(Set(bluetooth.disconnectCalls), ["AA-BB-CC-DD-EE-02", "AA-BB-CC-DD-EE-03"])
+            XCTAssertEqual(bluetooth.disconnectCalls.count, 2)
+            // Opening the menu afterwards pulls neither guest back.
+            bluetooth.connectCalls = []
+            controller.menuOpened()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertFalse(bluetooth.connectCalls.contains("AA-BB-CC-DD-EE-02"))
+            XCTAssertFalse(bluetooth.connectCalls.contains("AA-BB-CC-DD-EE-03"))
+        }
+    }
+
+    func testAThirdPairIsFetchedBackAutomaticallyToo() async throws {
+        let bluetooth = StubBluetooth()
+        try await withVirtualSession(bluetooth, prepare: {
+            $0.unlinkedGrace = 0.05
+            $0.reconnectDelays = [0.05, 0.05, 0.05]
+            $0.addOutput(OutputTarget(name: "Spare", deviceUID: "spare"))
+            $0.select(nil, slot: 2)
+        }) { controller in
+            let aggregate = try XCTUnwrap(AudioSystem.device(uid: testUID))
+            controller.select(OutputTarget(name: "AirPods Test C", bluetoothAddress: "AA-BB-CC-DD-EE-03"), slot: 2)
+            controller.pairLost(2)
+            XCTAssertEqual(controller.slotStatus[2], .reconnecting(attempt: 1, of: 3))
+            XCTAssertEqual(controller.slotStatus[0], .connected)
+            await waitUntil { controller.message != nil }
+            XCTAssertEqual(bluetooth.connectCalls, Array(repeating: "AA-BB-CC-DD-EE-03", count: 3))
+            XCTAssertTrue(controller.message?.contains("AirPods Test C") == true, controller.message ?? "")
+            XCTAssertEqual(controller.slotStatus[2], .unreachable)
+            // The two outputs that kept playing are untouched.
+            XCTAssertEqual(controller.phase, .active)
+            XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), aggregate.id)
+            XCTAssertEqual(AudioSystem.device(uid: testUID)?.id, aggregate.id)
+        }
     }
 
     func testStaleDeviceFromCrashIsRemovedOnLaunch() async throws {

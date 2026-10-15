@@ -51,3 +51,22 @@
 "+%@ ms added automatically" = "+%@ ms automatisch dazu";
 "Volume keys control all outputs" = "Lautstärketasten steuern alle Ausgänge";
 "Not available: %@. Check that the outputs are connected and switched on." = "Nicht verfügbar: %@. Prüfe, ob die Ausgänge angeschlossen und eingeschaltet sind.";
+
+/* Connecting, status and battery */
+"Connecting …" = "Verbinde …";
+"Reconnecting (%@ of %@) …" = "Verbinde neu (%1$@ von %2$@) …";
+"In the case" = "Im Case";
+"Not reachable" = "Nicht erreichbar";
+"Not available" = "Nicht verfügbar";
+"Bluetooth is connected, but there is no sound yet. Take the AirPods out of the case." = "Bluetooth ist verbunden, aber noch ohne Ton. AirPods aus dem Case nehmen.";
+"Switched off, too far away or playing on another device." = "Ausgeschaltet, zu weit weg oder spielt auf einem anderen Gerät.";
+"Left %@" = "Links %@";
+"Right %@" = "Rechts %@";
+"Battery %@" = "Akku %@";
+"Case %@" = "Case %@";
+"Connect when the menu opens" = "Beim Öffnen des Menüs verbinden";
+"Release guest AirPods when stopping" = "Gast-AirPods beim Beenden freigeben";
+"Pair new AirPods …" = "Neue AirPods koppeln …";
+"Put both AirPods in the case, open the lid and hold the button on the back until the light flashes white (AirPods 4 and AirPods Pro 3: double-tap the front of the case). Then click Connect next to them in Bluetooth settings." = "Beide AirPods ins Case legen, Deckel öffnen und die Taste hinten am Case gedrückt halten, bis das Licht weiss blinkt (AirPods 4 und AirPods Pro 3: zweimal vorne aufs Case tippen). Dann in den Bluetooth-Einstellungen daneben auf «Verbinden» klicken.";
+"Open Bluetooth settings" = "Bluetooth-Einstellungen öffnen";
+"“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "«%@» liess sich nicht automatisch zurückholen. Vielleicht spielt es gerade auf einem anderen Gerät, etwa einem iPhone.";

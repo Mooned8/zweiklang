@@ -82,6 +82,11 @@ public enum MultiOutputDevice {
         subDevices(id).compactMap { $0[kAudioSubDeviceUIDKey] as? String }
     }
 
+    /// Sub-devices that really play right now. A pair that dropped out stays in the composition but is missing here.
+    public static func activeSubDeviceUIDs(_ id: AudioObjectID) -> [String] {
+        HAL.objectIDs(id, propertyAddress(kAudioAggregateDevicePropertyActiveSubDeviceList)).compactMap { AudioSystem.device(id: $0)?.uid }
+    }
+
     public static func isStacked(_ id: AudioObjectID) -> Bool {
         (composition(id)[kAudioAggregateDeviceIsStackedKey] as? Int) == 1
     }

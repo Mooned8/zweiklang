@@ -38,6 +38,23 @@ public enum SessionPhase: Equatable, Sendable {
     case failed(String)
 }
 
+/// What the menu shows below each output.
+public enum PairStatus: Equatable, Sendable {
+    case none
+    /// The sound device is there.
+    case connected
+    case connecting
+    /// Automatic attempt during a session.
+    case reconnecting(attempt: Int, of: Int)
+    /// Bluetooth link without a sound device, which is what AirPods in the closed charging case do.
+    case inCase
+    /// The last attempt failed: switched off, too far away or playing on another device.
+    case unreachable
+    case notConnected
+    /// A wired or virtual output that is missing.
+    case unavailable
+}
+
 /// Connects the chosen outputs, builds the multi-output device, makes it the system output
 /// and controls each output's volume and timing.
 @MainActor
@@ -70,6 +87,19 @@ public final class SessionController {
     public var linked = false {
         didSet { defaults.set(linked, forKey: Keys.linked) }
     }
+    /// Status line of each slot.
+    public private(set) var slotStatus: [PairStatus] = [.none, .none]
+    /// Battery of each slot while its Bluetooth link is up.
+    public private(set) var slotBattery: [BatteryLevel?] = [nil, nil]
+    /// Connect the chosen pairs as soon as the menu opens, so "Listen together" starts at once.
+    public var preconnectEnabled = true {
+        didSet { defaults.set(preconnectEnabled, forKey: Keys.preconnect) }
+    }
+    /// Disconnect the guest pairs (every Bluetooth pair after the first) when the session ends,
+    /// so they can go back to their owners' iPhones.
+    public var releaseGuestOnStop = true {
+        didSet { defaults.set(releaseGuestOnStop, forKey: Keys.releaseGuest) }
+    }
 
     /// Called after a volume key changed the volume (for the on-screen display).
     @ObservationIgnored public var onVolumeKeyFeedback: (() -> Void)?
@@ -77,6 +107,11 @@ public final class SessionController {
     @ObservationIgnored public var onActiveChange: ((Bool) -> Void)?
     @ObservationIgnored public var connectTimeout: TimeInterval = 12
     @ObservationIgnored public var audioAppearTimeout: TimeInterval = 15
+    /// How long to look for audio after a failed Bluetooth call (macOS sometimes connects anyway).
+    @ObservationIgnored var unlinkedGrace: TimeInterval = 4
+    /// Pauses before the automatic attempts after a pair dropped out of a session.
+    @ObservationIgnored var reconnectDelays: [TimeInterval] = [3, 10, 30]
+    @ObservationIgnored var releaseTimeout: TimeInterval = 3
     /// Fixed names for screenshots.
     @ObservationIgnored var displayNameOverrides: [Int: String] = [:]
 
@@ -98,12 +133,45 @@ public final class SessionController {
     /// Delays already written to the current device, so a value the HAL stores differently is not rewritten in a loop.
     @ObservationIgnored private var submittedDelays: (device: AudioObjectID, frames: [String: Int])?
 
+    /// One connection attempt per headphones, shared by preconnect, start and reconnect.
+    private struct ConnectAttempt {
+        let id: UUID
+        let task: Task<AudioDevice?, Never>
+    }
+    @ObservationIgnored private var connectAttempts: [String: ConnectAttempt] = [:]
+    /// Targets whose last attempt failed without a Bluetooth link.
+    @ObservationIgnored private var unreachableTargets: Set<String> = []
+    /// Which target had its sound device at the last refresh, to notice a pair dropping out.
+    @ObservationIgnored private var presentTargetIDs: [String?] = [nil, nil]
+    @ObservationIgnored private var reconnectPolicies: [ReconnectPolicy] = []
+    @ObservationIgnored private var reconnectProgress: [(attempt: Int, of: Int)?] = [nil, nil]
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    @ObservationIgnored private var reconnectRunID: UUID?
+    @ObservationIgnored private var pendingRelease: Task<Void, Never>?
+    /// Guest pairs whose connection was still under way at Stop, by target ID: release them if the link comes up late.
+    @ObservationIgnored private var releaseWhenLinked: [String: (address: String, until: Date)] = [:]
+    /// Released guest pairs are not connected again by merely opening the menu.
+    @ObservationIgnored private var releasedTargetIDs: Set<String> = []
+    @ObservationIgnored private var aggregateCheck: Task<Void, Never>?
+    /// The session should own the system output; false after the user picked another output.
+    @ObservationIgnored private var wantsSystemOutput = false
+    /// The output the user picked over the shared one, to undo macOS jumping to returning AirPods.
+    @ObservationIgnored private var userOutput: AudioObjectID?
+    @ObservationIgnored private var batteries: [String: BatteryLevel] = [:]
+    @ObservationIgnored private var batteryRead: UUID?
+    @ObservationIgnored private var batteryReadAgain = false
+    @ObservationIgnored private var lastBatteryRead: Date?
+
     private enum Keys {
         static let targets = "targets"
         static let linked = "linked"
         static let previousOutput = "previousOutputUID"
         static let syncOffsets = "syncOffsets"
+        static let preconnect = "preconnect"
+        static let releaseGuest = "releaseGuestOnStop"
     }
+
+    private var slots: Range<Int> { targets.indices }
 
     public init(defaults: UserDefaults, bluetooth: BluetoothProviding, multiOutputUID: String = MultiOutputDevice.defaultUID) {
         AudioSystem.configure()
@@ -111,6 +179,8 @@ public final class SessionController {
         self.bluetooth = bluetooth
         self.multiOutputUID = multiOutputUID
         self.linked = defaults.bool(forKey: Keys.linked)
+        self.preconnectEnabled = defaults.object(forKey: Keys.preconnect) as? Bool ?? true
+        self.releaseGuestOnStop = defaults.object(forKey: Keys.releaseGuest) as? Bool ?? true
         if let data = defaults.data(forKey: Keys.targets),
            let saved = try? JSONDecoder().decode([OutputTarget?].self, from: data),
            saved.count >= Self.minimumSlots {
@@ -121,6 +191,7 @@ public final class SessionController {
             syncOffsets = saved.mapValues(SyncDelays.clampManual).filter { $0.value > 0 }
         }
         installSystemListeners()
+        bluetooth.onLinkChange = { [weak self] in self?.scheduleRefresh() }
         refresh()
         // First launch only: pre-select two AirPods. Later an empty choice stays empty.
         if defaults.data(forKey: Keys.targets) == nil {
@@ -137,10 +208,26 @@ public final class SessionController {
 
     public func select(_ target: OutputTarget?, slot: Int) {
         guard targets.indices.contains(slot) else { return }
+        if let target { chosenOnPurpose(target) }
         targets[slot] = target
         saveTargets()
         if case .failed = phase { phase = .idle }
         refresh()
+        preconnect(slots: [slot])
+    }
+
+    /// The menu opened: fresh state, battery levels, and the chosen pairs get connected in the background.
+    public func menuOpened() {
+        refresh()
+        refreshBatteries()
+        preconnect(slots: Array(slots))
+    }
+
+    /// Picked by the user: a guest pair released after the last session may be connected again.
+    private func chosenOnPurpose(_ target: OutputTarget) {
+        releasedTargetIDs.remove(target.id)
+        // A late release from the last session must not take it away.
+        releaseWhenLinked[target.id] = nil
     }
 
     /// Slots with a chosen output, in menu order.
@@ -156,11 +243,13 @@ public final class SessionController {
 
     public func addOutput(_ target: OutputTarget) {
         guard canEditOutputs, !targets.contains(where: { $0?.id == target.id }) else { return }
+        chosenOnPurpose(target)
         targets.append(target)
         resizeSlotArrays()
         saveTargets()
         if case .failed = phase { phase = .idle }
         refresh()
+        preconnect(slots: [targets.count - 1])
     }
 
     public func removeOutput(slot: Int) {
@@ -170,6 +259,11 @@ public final class SessionController {
         volumes.remove(at: slot)
         slotHasVolume.remove(at: slot)
         automaticDelays.remove(at: slot)
+        slotStatus.remove(at: slot)
+        slotBattery.remove(at: slot)
+        presentTargetIDs.remove(at: slot)
+        reconnectPolicies.remove(at: slot)
+        reconnectProgress.remove(at: slot)
         saveTargets()
         if case .failed = phase { phase = .idle }
         refresh()
@@ -190,10 +284,16 @@ public final class SessionController {
         volumes = fitted(volumes, 0.5)
         slotHasVolume = fitted(slotHasVolume, false)
         automaticDelays = fitted(automaticDelays, 0)
+        if slotStatus.count != targets.count { slotStatus = fitted(slotStatus, .none) }
+        if slotBattery.count != targets.count { slotBattery = fitted(slotBattery, nil) }
+        presentTargetIDs = fitted(presentTargetIDs, nil)
+        reconnectPolicies = fitted(reconnectPolicies, ReconnectPolicy(delays: reconnectDelays))
+        reconnectProgress = fitted(reconnectProgress, nil)
     }
 
     /// Re-reads devices, connection state, volumes and the current system output.
     public func refresh() {
+        defer { updateStatuses() }
         let outputs = AudioSystem.outputDevices()
         var list = bluetooth.pairedHeadphones().map { headphone in
             // Core Audio carries the name set in System Settings ("Anna’s AirPods Pro").
@@ -228,7 +328,11 @@ public final class SessionController {
         if devices.map({ $0?.id }) != slotDevices.map({ $0?.id }) {
             slotHasVolume = devices.map { $0.map { Volume.canControl($0.id) } ?? false }
         }
+        releaseLateGuestLinks()
+        let appeared = zip(devices, slotDevices).contains { $0.0 != nil && $0.1 == nil }
         slotDevices = devices
+        trackPresence()
+        if appeared { refreshBatteries() }
         for (slot, device) in slotDevices.enumerated() {
             if let device, let target = targets[slot], target.name != device.name {
                 targets[slot]?.name = device.name
@@ -247,6 +351,7 @@ public final class SessionController {
                 phase = .failed(L("The shared output was removed."))
                 return
             }
+            trackOutputChoice(aggregate: aggregate)
             syncVolumeObservers()
             readVolumes()
             if !isBusy { applyDelays() }
@@ -302,9 +407,16 @@ public final class SessionController {
             isReconnecting = false
         }
         if !wasActive {
+            phase = .working(L("Connecting headphones …"))
+            reconnectPolicies = slots.map { _ in ReconnectPolicy(delays: reconnectDelays) }
+            reconnectProgress = slots.map { _ in nil }
+            releasedTargetIDs = []
+            releaseWhenLinked = [:]
+            // A guest pair still being released from the last session would vanish right after connecting.
+            await pendingRelease?.value
+            if cancelRequested { return }
             // Remember the output before connecting: macOS may switch to freshly connected AirPods.
             rememberPreviousOutput()
-            phase = .working(L("Connecting headphones …"))
         }
 
         log.info("start: \(chosen.map(\.name), privacy: .private(mask: .hash))")
@@ -350,11 +462,17 @@ public final class SessionController {
         if !wasActive {
             isMuted = false
             volumesBeforeMute = nil
+        } else {
+            // Fetched back by hand: the automatic attempts may start over.
+            reconnectPolicies = slots.map { _ in ReconnectPolicy(delays: reconnectDelays) }
         }
+        wantsSystemOutput = true
+        userOutput = nil
         phase = .active
         refresh()
         // Sample rates can change once the device runs; delays count in each device's own rate.
         applyDelays()
+        refreshBatteries(force: true)
         log.info("active: \(devices.map(\.uid), privacy: .private(mask: .hash)), volumes \(self.volumes, privacy: .private(mask: .hash))")
     }
 
@@ -379,15 +497,31 @@ public final class SessionController {
     public func stop() {
         delayUpdate?.cancel()
         let wasBusy = isBusy
+        let hadSession = wasBusy || phase == .active
         if wasBusy { cancelRequested = true }
+        aggregateCheck?.cancel()
+        aggregateCheck = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectRunID = nil
+        reconnectProgress = slots.map { _ in nil }
+        cancelConnectAttempts()
         endMute()
         message = nil
         cleanUpSession()
         if wasBusy { rollbackOutput() }
         defaults.removeObject(forKey: Keys.previousOutput)
         phase = .idle
+        if hadSession && releaseGuestOnStop { releaseGuests(guestPairs) }
         refresh()
         log.info("stopped, output now \(AudioSystem.defaultOutputDeviceID().flatMap(AudioSystem.device(id:))?.name ?? "-", privacy: .private(mask: .hash))")
+    }
+
+    /// For quitting: ends the session and waits until the guest pair is released,
+    /// because macOS only drops the Bluetooth link while the app still runs.
+    public func prepareForQuit() async {
+        stop()
+        await pendingRelease?.value
     }
 
     /// Gives the headphones their volume back if the session ends while muted.
@@ -411,6 +545,8 @@ public final class SessionController {
 
     /// Makes the multi-output device the system output again (if something else took over).
     public func selectAsOutput() {
+        wantsSystemOutput = true
+        userOutput = nil
         if let aggregate = aggregateDevice() { try? AudioSystem.setDefaultOutputDevice(aggregate.id) }
         refresh()
     }
@@ -426,6 +562,7 @@ public final class SessionController {
             && expected.count == targets.compactMap({ $0 }).count
             && Set(MultiOutputDevice.subDeviceUIDs(aggregate.id)) == Set(expected)
         if isOurs && AudioSystem.defaultOutputDeviceID() == aggregate.id {
+            wantsSystemOutput = true
             phase = .active
             refresh()
         } else {
@@ -448,12 +585,66 @@ public final class SessionController {
 
     private func ensureAvailable(_ target: OutputTarget) async -> AudioDevice? {
         if let device = currentDevice(for: target) { return device }
+        guard target.bluetoothAddress != nil else { return nil }
+        // Joins a preconnect that is still running instead of starting a second attempt.
+        return await connectTask(for: target).value
+    }
+
+    private func prepareAggregate(subDeviceUIDs: [String], extraLatencyFrames: [String: Int]) async throws -> AudioDevice {
+        if let existing = aggregateDevice() {
+            // An output that dropped out stays in the composition; keep the device only if it plays on all of them.
+            if existing.hasOutput, MultiOutputDevice.subDeviceUIDs(existing.id) == subDeviceUIDs,
+               Set(MultiOutputDevice.activeSubDeviceUIDs(existing.id)) == Set(subDeviceUIDs) { return existing }
+            // Removing the system output lets macOS pick the next one, maybe the speakers: hand it to headphones first.
+            if AudioSystem.defaultOutputDeviceID() == existing.id {
+                let handover = subDeviceUIDs.first { BluetoothAddress.fromDeviceUID($0) != nil } ?? subDeviceUIDs[0]
+                guard let device = AudioSystem.device(uid: handover), switchOutputAndWait(to: device.id) else {
+                    throw AudioError(status: kAudioHardwareIllegalOperationError, operation: L("Switching the audio output"))
+                }
+            }
+            try MultiOutputDevice.destroy(existing.id)
+        }
+        return try await MultiOutputDevice.create(subDeviceUIDs: subDeviceUIDs, extraLatencyFrames: extraLatencyFrames,
+                                                  uid: multiOutputUID)
+    }
+
+    private func switchOutputAndWait(to id: AudioObjectID) -> Bool {
+        guard (try? AudioSystem.setDefaultOutputDevice(id)) != nil else { return false }
+        let deadline = Date().addingTimeInterval(1)
+        while AudioSystem.defaultOutputDeviceID() != id, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return AudioSystem.defaultOutputDeviceID() == id
+    }
+
+    // MARK: - Connecting
+
+    /// Starts the connection attempt for these headphones, or returns the one already running.
+    private func connectTask(for target: OutputTarget) -> Task<AudioDevice?, Never> {
+        if let running = connectAttempts[target.id] { return running.task }
+        let id = UUID()
+        let task = Task { [weak self] () -> AudioDevice? in
+            guard let self else { return nil }
+            // A release still under way would take the link away again right after it came up.
+            await self.pendingRelease?.value
+            let device = await self.connectAndWait(target)
+            self.connectFinished(target, attempt: id, device: device)
+            return device
+        }
+        connectAttempts[target.id] = ConnectAttempt(id: id, task: task)
+        unreachableTargets.remove(target.id)
+        updateStatuses()
+        return task
+    }
+
+    /// Opens the Bluetooth link and waits for the sound device; ends early when the attempt is cancelled.
+    private func connectAndWait(_ target: OutputTarget) async -> AudioDevice? {
         guard let address = target.bluetoothAddress else { return nil }
         let linked = await bluetooth.connect(address: address, timeout: connectTimeout)
         log.info("bluetooth connect \(target.name, privacy: .private(mask: .hash)): \(linked, privacy: .private(mask: .hash))")
         // macOS sometimes finishes the connection even when the call reports a failure.
-        let deadline = Date().addingTimeInterval(linked ? audioAppearTimeout : 4)
-        while Date() < deadline, !cancelRequested {
+        let deadline = Date().addingTimeInterval(linked ? audioAppearTimeout : unlinkedGrace)
+        while Date() < deadline, !Task.isCancelled {
             if currentDevice(for: target) != nil {
                 // Give the freshly published device a moment to settle before using it.
                 try? await Task.sleep(nanoseconds: 700_000_000)
@@ -461,17 +652,318 @@ public final class SessionController {
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        if linked { log.error("\(target.name, privacy: .private(mask: .hash)) connected, but no audio device appeared (still in the case?)") }
+        if linked, !Task.isCancelled {
+            log.error("\(target.name, privacy: .private(mask: .hash)) connected, but no audio device appeared (still in the case?)")
+        }
         return nil
     }
 
-    private func prepareAggregate(subDeviceUIDs: [String], extraLatencyFrames: [String: Int]) async throws -> AudioDevice {
-        if let existing = aggregateDevice() {
-            if existing.hasOutput, MultiOutputDevice.subDeviceUIDs(existing.id) == subDeviceUIDs { return existing }
-            try MultiOutputDevice.destroy(existing.id)
+    private func connectFinished(_ target: OutputTarget, attempt: UUID, device: AudioDevice?) {
+        guard connectAttempts[target.id]?.id == attempt else { return } // cancelled meanwhile
+        connectAttempts[target.id] = nil
+        if device == nil, let address = target.bluetoothAddress, !bluetooth.isConnected(address: address) {
+            unreachableTargets.insert(target.id)
         }
-        return try await MultiOutputDevice.create(subDeviceUIDs: subDeviceUIDs, extraLatencyFrames: extraLatencyFrames,
-                                                  uid: multiOutputUID)
+        refresh()
+        // The battery is known as soon as the link is up, also for AirPods still in the case.
+        if device != nil || target.bluetoothAddress.map(bluetooth.isConnected(address:)) == true { refreshBatteries(force: true) }
+    }
+
+    private func cancelConnectAttempts() {
+        connectAttempts.values.forEach { $0.task.cancel() }
+        connectAttempts = [:]
+    }
+
+    /// Connects the chosen pairs in the background while no session runs, so a start is instant.
+    private func preconnect(slots chosen: [Int]) {
+        guard preconnectEnabled, !isBusy, phase != .active else { return }
+        for slot in chosen {
+            guard let target = targets[slot], target.bluetoothAddress != nil, !releasedTargetIDs.contains(target.id),
+                  currentDevice(for: target) == nil, connectAttempts[target.id] == nil else { continue }
+            let outputBefore = AudioSystem.defaultOutputDeviceID()
+            let task = connectTask(for: target)
+            Task { [weak self] in
+                guard let device = await task.value else { return }
+                self?.undoOutputSwitch(to: device, outputBefore: outputBefore)
+            }
+        }
+    }
+
+    /// macOS likes to move the sound to freshly connected AirPods. Without a session that only surprises,
+    /// so switch back, unless a session started meanwhile or the output moved on again.
+    private func undoOutputSwitch(to device: AudioDevice, outputBefore: AudioObjectID?) {
+        guard !isBusy, phase != .active, let outputBefore, outputBefore != device.id,
+              AudioSystem.defaultOutputDeviceID() == device.id,
+              AudioSystem.device(id: outputBefore)?.hasOutput == true, AudioSystem.isAlive(outputBefore) else { return }
+        log.info("preconnect: sound back to the previous output")
+        try? AudioSystem.setDefaultOutputDevice(outputBefore)
+    }
+
+    // MARK: - Automatic reconnect
+
+    private func trackPresence() {
+        for slot in slots {
+            let id = targets[slot]?.id
+            let present = slotDevices[slot] != nil
+            if present, let id {
+                unreachableTargets.remove(id)
+                if phase == .active {
+                    reconnectPolicies[slot].pairPresent()
+                    // Back by itself or fetched back: make sure the shared output plays on it again.
+                    if presentTargetIDs[slot] != id { scheduleAggregateCheck() }
+                }
+            } else if phase == .active, let id, presentTargetIDs[slot] == id {
+                pairLost(slot)
+            }
+            presentTargetIDs[slot] = present ? id : nil
+        }
+    }
+
+    /// A pair of the running session lost its sound device: back in the case, taken by an iPhone, out of range.
+    func pairLost(_ slot: Int) {
+        guard phase == .active, targets[slot]?.bluetoothAddress != nil else { return }
+        log.info("slot \(slot, privacy: .public) dropped out")
+        if reconnectPolicies[slot].pairLost() {
+            reconnectProgress[slot] = (reconnectPolicies[slot].used + 1, reconnectPolicies[slot].maxAttempts)
+            updateStatuses()
+        }
+        guard reconnectTask == nil else { return }
+        let run = UUID()
+        reconnectRunID = run
+        reconnectTask = Task { [weak self] in await self?.runAutoReconnect(run) }
+    }
+
+    private func missingBluetoothSlots() -> [Int] {
+        slots.filter { targets[$0]?.bluetoothAddress != nil && slotDevices[$0] == nil }
+    }
+
+    /// One loop for all slots: pause, then try again, within each slot's budget.
+    private func runAutoReconnect(_ run: UUID) async {
+        defer {
+            if reconnectRunID == run {
+                reconnectTask = nil
+                reconnectRunID = nil
+                reconnectProgress = slots.map { _ in nil }
+                updateStatuses()
+            }
+        }
+        var reported: Set<Int> = []
+        while !Task.isCancelled, phase == .active {
+            let missing = missingBluetoothSlots()
+            let exhausted = missing.filter { reconnectPolicies[$0].nextDelay == nil && !reported.contains($0) }
+            if !exhausted.isEmpty {
+                reported.formUnion(exhausted)
+                giveUp(exhausted)
+            }
+            let waiting = missing.filter { reconnectPolicies[$0].nextDelay != nil }
+            guard !waiting.isEmpty else { return }
+            for slot in waiting {
+                reconnectProgress[slot] = (reconnectPolicies[slot].used + 1, reconnectPolicies[slot].maxAttempts)
+            }
+            updateStatuses()
+            let delay = waiting.compactMap { reconnectPolicies[$0].nextDelay }.max() ?? 0
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            while isBusy, !Task.isCancelled { try? await Task.sleep(nanoseconds: 300_000_000) } // a manual reconnect runs
+            guard !Task.isCancelled, phase == .active else { return }
+            // Only real attempts count; a pair that came back by itself during the pause costs nothing.
+            let stillMissing = Set(missingBluetoothSlots())
+            let attempt = waiting.filter(stillMissing.contains)
+            attempt.forEach { reconnectPolicies[$0].takeAttempt() }
+            if !attempt.isEmpty { await reconnect(slots: attempt) }
+        }
+    }
+
+    private func giveUp(_ lost: [Int]) {
+        log.error("automatic reconnect gave up for \(lost.count, privacy: .public) pair(s)")
+        message = lost.map { slot in
+            L("“\(displayName(slot: slot))” could not be brought back automatically. It may be playing on another device, such as an iPhone.")
+        }.joined(separator: "\n")
+    }
+
+    /// Connects missing pairs again. Unlike "Reconnect" by hand it never ends the session and leaves an
+    /// output the user picked meanwhile alone.
+    private func reconnect(slots lost: [Int]) async {
+        guard !isBusy, phase == .active else { return }
+        isBusy = true
+        isReconnecting = true
+        cancelRequested = false
+        defer {
+            isBusy = false
+            isReconnecting = false
+            refresh() // only now a missing shared output ends the session
+        }
+        for task in lost.compactMap({ targets[$0] }).map({ connectTask(for: $0) }) { _ = await task.value }
+        guard !cancelRequested, phase == .active else { return }
+        await restoreSharedOutput()
+    }
+
+    private func scheduleAggregateCheck() {
+        guard aggregateCheck == nil else { return }
+        aggregateCheck = Task { [weak self] in
+            // Give the HAL a moment to take the returning pair back into the shared output by itself.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self else { return }
+            // A reconnect in progress: check once it is done instead of dropping the check.
+            while self.isBusy, !Task.isCancelled { try? await Task.sleep(nanoseconds: 300_000_000) }
+            guard !Task.isCancelled else { return }
+            self.aggregateCheck = nil
+            guard self.phase == .active else { return }
+            self.isBusy = true
+            self.cancelRequested = false
+            defer {
+                self.isBusy = false
+                self.refresh()
+            }
+            await self.restoreSharedOutput()
+        }
+    }
+
+    /// While a session runs: picking another output means the user wants it; macOS moving the sound to one
+    /// of the session's own pairs (it does that for returning AirPods) does not count as a choice.
+    private func trackOutputChoice(aggregate: AudioDevice?) {
+        guard !isBusy, let current = AudioSystem.defaultOutputDeviceID() else { return }
+        if current == aggregate?.id {
+            wantsSystemOutput = true
+            userOutput = nil
+        } else if !slotDevices.contains(where: { $0?.id == current }) {
+            wantsSystemOutput = false
+            userOutput = current
+        }
+    }
+
+    /// With every output back: the shared output must play on all of them (rebuilt if needed), and the system
+    /// output goes where it belongs: to the shared output, or back to what the user picked meanwhile.
+    private func restoreSharedOutput() async {
+        let chosen = targets.compactMap { $0 }
+        let devices = chosen.compactMap { currentDevice(for: $0) }
+        guard devices.count == chosen.count, devices.count >= Self.minimumSlots else { return }
+        do {
+            let delays = desiredDelays(Array(zip(chosen, devices)))
+            let aggregate = try await prepareAggregate(subDeviceUIDs: devices.map(\.uid), extraLatencyFrames: delays.frames)
+            if cancelRequested { cleanUpSession(); return } // stopped meanwhile
+            let current = AudioSystem.defaultOutputDeviceID()
+            if wantsSystemOutput {
+                if current != aggregate.id { try await switchOutput(to: aggregate) }
+            } else if let current, devices.contains(where: { $0.id == current }), let userOutput, AudioSystem.isAlive(userOutput) {
+                try? AudioSystem.setDefaultOutputDevice(userOutput) // macOS jumped to the returning AirPods
+            }
+            log.info("shared output plays on every output again")
+        } catch {
+            log.error("reconnect: \(error.localizedDescription, privacy: .private(mask: .hash))")
+        }
+    }
+
+    // MARK: - Releasing the guest pairs
+
+    /// The first Bluetooth pair in the list belongs to the Mac's owner.
+    private var ownPair: OutputTarget? { targets.lazy.compactMap { $0 }.first { $0.bluetoothAddress != nil } }
+
+    /// Every other Bluetooth pair is a guest's.
+    private var guestPairs: [OutputTarget] {
+        let pairs = targets.compactMap { $0 }.filter { $0.bluetoothAddress != nil }
+        guard let own = pairs.first else { return [] }
+        return pairs.dropFirst().filter { $0.id != own.id }
+    }
+
+    /// Disconnects guest pairs after a session so they can go back to their owners' iPhones.
+    private func releaseGuests(_ guests: [OutputTarget]) {
+        var addresses: [String] = []
+        for guest in guests {
+            guard let address = guest.bluetoothAddress else { continue }
+            releasedTargetIDs.insert(guest.id)
+            guard bluetooth.isConnected(address: address) else {
+                // A native connection may still finish after Stop (even one whose wait already timed out).
+                releaseWhenLinked[guest.id] = (address, Date().addingTimeInterval(connectTimeout + 10))
+                continue
+            }
+            if let device = currentDevice(for: guest), AudioSystem.defaultOutputDeviceID() == device.id {
+                // Without the guest pair macOS would pick the next output, maybe the speakers.
+                guard let own = ownPair.flatMap({ currentDevice(for: $0) }), switchOutputAndWait(to: own.id) else {
+                    log.info("guest pair kept: it is the only headphone output")
+                    continue
+                }
+            }
+            addresses.append(address)
+        }
+        guard !addresses.isEmpty else { return }
+        let previous = pendingRelease
+        let timeout = releaseTimeout
+        pendingRelease = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            // All at once: quitting waits for them.
+            let releases = addresses.map { address in
+                Task { await self.bluetooth.disconnect(address: address, timeout: timeout) }
+            }
+            for release in releases {
+                let released = await release.value
+                log.info("guest pair released: \(released, privacy: .public)")
+            }
+            self.refresh()
+        }
+    }
+
+    /// A guest's connection finished only after Stop: release it now, unless a new session took it over.
+    private func releaseLateGuestLinks() {
+        guard !releaseWhenLinked.isEmpty else { return }
+        let now = Date()
+        releaseWhenLinked = releaseWhenLinked.filter { now < $0.value.until }
+        // A new start clears the markers, so a busy flag here only means the cancelled start is winding down.
+        guard phase != .active else { return }
+        let late = guestPairs.filter { guest in
+            releaseWhenLinked[guest.id].map { bluetooth.isConnected(address: $0.address) } ?? false
+        }
+        guard !late.isEmpty else { return }
+        late.forEach { releaseWhenLinked[$0.id] = nil }
+        releaseGuests(late)
+    }
+
+    // MARK: - Status and battery
+
+    private func updateStatuses() {
+        let statuses = slots.map { status(slot: $0) }
+        if statuses != slotStatus { slotStatus = statuses }
+        let levels: [BatteryLevel?] = slots.map { slot in
+            guard statuses[slot] == .connected || statuses[slot] == .inCase,
+                  let address = targets[slot]?.bluetoothAddress else { return nil }
+            return batteries[BluetoothAddress.normalized(address)]
+        }
+        if levels != slotBattery { slotBattery = levels }
+    }
+
+    private func status(slot: Int) -> PairStatus {
+        guard let target = targets[slot] else { return .none }
+        if slotDevices[slot] != nil { return .connected }
+        if let progress = reconnectProgress[slot] { return .reconnecting(attempt: progress.attempt, of: progress.of) }
+        if connectAttempts[target.id] != nil { return .connecting }
+        guard let address = target.bluetoothAddress else { return .unavailable }
+        if bluetooth.isConnected(address: address) { return .inCase }
+        return unreachableTargets.contains(target.id) ? .unreachable : .notConnected
+    }
+
+    /// Reads battery levels in the background, one read at a time and at most every 10 s unless forced.
+    private func refreshBatteries(force: Bool = false) {
+        guard targets.contains(where: { $0?.bluetoothAddress != nil }) else { return }
+        if batteryRead != nil {
+            if force { batteryReadAgain = true }
+            return
+        }
+        if !force, let last = lastBatteryRead, Date().timeIntervalSince(last) < 10 { return }
+        let read = UUID()
+        batteryRead = read
+        lastBatteryRead = Date()
+        Task { [weak self] in
+            guard let self else { return }
+            let levels = await self.bluetooth.batteryLevels()
+            guard self.batteryRead == read else { return }
+            self.batteryRead = nil
+            self.batteries = levels
+            self.updateStatuses()
+            if self.batteryReadAgain {
+                self.batteryReadAgain = false
+                self.refreshBatteries(force: true)
+            }
+        }
     }
 
     /// macOS can accept the switch without error and still keep the old output; check it really happened.
