@@ -5,7 +5,9 @@
 #
 # One-time setup on the release Mac:
 #   1. Xcode > Settings > Accounts > Manage Certificates > + > "Developer ID Application".
-#   2. Store notarization credentials in the keychain (asks for an app-specific password):
+#   2. Store notarization credentials in the keychain, either with an App Store Connect API key
+#        xcrun notarytool store-credentials zweiklang-notary --key AuthKey_<id>.p8 --key-id <id> --issuer <issuer-id>
+#      or with an app-specific password
 #        xcrun notarytool store-credentials zweiklang-notary --apple-id <apple-id> --team-id <team-id>
 set -euo pipefail
 cd "$(dirname "$0")/.."
