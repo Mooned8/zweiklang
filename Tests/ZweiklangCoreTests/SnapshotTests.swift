@@ -105,11 +105,16 @@ final class SnapshotTests: XCTestCase {
         // Screenshot for the README, with friendly names.
         // Last, because it switches the volume-key option off (the test runner has no permission anyway).
         options.setMediaKeysEnabled(false)
-        controller.displayNameOverrides = [0: "Anna’s AirPods Pro", 1: "Ben’s AirPods"]
+        // BlackHole stands in for headphones on a USB DAC: like those it has no own sound processing,
+        // so it waits for the built-in speakers, which is what the timing section explains.
+        controller.displayNameOverrides = [0: "Headphones (USB DAC)", 1: "MacBook Pro Speakers"]
+        controller.setSyncOffset(0, slot: 0)
+        controller.setSyncOffset(0, slot: 1)
         let english = try XCTUnwrap(Bundle(path: try XCTUnwrap(original.path(forResource: "en", ofType: "lproj"))))
         let previous = Bundle.zweiklang
         Bundle.zweiklang = english
-        try render(menu, to: "readme-screenshot.png", in: directory)
+        try render(MenuContentView(controller: controller, options: options, onQuit: {}, showsTiming: true),
+                   to: "readme-screenshot.png", in: directory)
         Bundle.zweiklang = previous
         controller.displayNameOverrides = [:]
     }
