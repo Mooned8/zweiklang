@@ -5,8 +5,10 @@
 <img src="docs/screenshot.png" width="300" alt="Zweiklang menu with one volume slider per pair of AirPods">
 
 - Connects both pairs of AirPods with one click and switches the Mac's sound to both.
+- More than two outputs: add a third pair of headphones or the speakers, each with its own slider.
+- Timing: if one output plays ahead (e.g. speakers next to Bluetooth headphones), delay it until everything is in sync. The setting is saved per device.
 - One volume slider per pair, optionally linked.
-- The keyboard volume keys change both pairs at once (with a small on-screen display, also over full-screen video).
+- The keyboard volume keys change all outputs at once (with a small on-screen display, also over full-screen video).
 - "Stop listening together" brings back the previous sound output.
 - Speaks English, German, Spanish, French, Italian, Dutch and Portuguese, following the Mac's language.
 
@@ -28,8 +30,9 @@ Tell your coding agent (Claude Code, Codex, …):
 
 1. Pair both AirPods with the Mac once (System Settings > Bluetooth). Your friend's AirPods only need this the first time.
 2. Take both pairs out of their cases.
-3. Click the AirPods icon in the menu bar, pick the two pairs and click **Listen together**.
-4. Adjust each pair with its slider. **Stop listening together** ends it.
+3. Click the AirPods icon in the menu bar, pick the two pairs and click **Listen together**. **Add output** adds more headphones or speakers.
+4. Adjust each output with its slider. **Stop listening together** ends it.
+5. If one output plays ahead, open **Timing** and delay it in steps of 5 ms until the sound is in sync.
 
 On first launch macOS asks whether Zweiklang may use Bluetooth: click **Allow**.
 For the volume keys, click **Allow …** in the menu once and switch Zweiklang on under System Settings > Privacy & Security > Accessibility. The gear icon turns this off if you do not want it.
@@ -41,6 +44,8 @@ Shortcuts and Siri can control the app with the URLs `zweiklang://start`, `zweik
 - AirPods in their closed case cannot play sound. Take them out before you start.
 - AirPods switch automatically between Apple devices. If your friend's iPhone starts playing something, their AirPods may jump back to it; click **Reconnect** in the menu.
 - Don't use the AirPods' microphone during a film: macOS then switches them to lower phone-call quality.
+- More than two Bluetooth headphones on one Mac can cause dropouts: they share one Bluetooth radio.
+- macOS already lines up the outputs by the delay each device reports. Bluetooth headphones are often a little later than they report; that rest is what the Timing sliders are for.
 - Your own multi-output devices in Audio MIDI Setup stay untouched. Zweiklang creates its own while you listen together and removes it afterwards.
 
 ## Uninstall
@@ -60,7 +65,7 @@ Details for contributors and AI agents: [AGENTS.md](AGENTS.md).
 
 ## Auf Deutsch
 
-Zweiklang spielt den Ton des Mac gleichzeitig auf zwei AirPods ab, mit einem eigenen Lautstärkeregler pro Paar. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac.
+Zweiklang spielt den Ton des Mac gleichzeitig auf zwei AirPods ab, mit einem eigenen Lautstärkeregler pro Paar. Weitere Kopfhörer oder Lautsprecher lassen sich dazunehmen; spielt einer zu früh, lässt er sich unter «Zeitabgleich» verzögern. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac.
 
 ## License
 

@@ -1,6 +1,6 @@
 # Zweiklang: instructions for AI agents
 
-Zweiklang is a macOS menu bar app that plays the Mac's sound on two pairs of AirPods at once, with one volume slider per pair. Bundle ID `ch.moritz.zweiklang`, signed with Developer ID, team `G2R8R847MM`.
+Zweiklang is a macOS menu bar app that plays the Mac's sound on two pairs of AirPods at once (or more outputs, e.g. a third pair or speakers), with one volume slider and one timing slider per output. Bundle ID `ch.moritz.zweiklang`, signed with Developer ID, team `G2R8R847MM`.
 
 ## Installing Zweiklang for a user
 
@@ -48,7 +48,7 @@ Quit the app (its menu, or the `osascript` line above; quitting removes the app'
 
 - Project file is generated: `xcodegen generate` (from `project.yml`). Targets: `ZweiklangCore` (framework: logic, SwiftUI views, translations), `Zweiklang` (app entry), `ZweiklangCoreTests`.
 - `scripts/build-and-install.sh` tests, builds, signs (Developer ID > Apple Development > ad hoc) and installs locally. `scripts/release.sh` produces the notarized `build/Zweiklang.dmg`; `--publish` also creates the GitHub release. Release setup is described at the top of that script.
-- Tests switch the system sound output for a few seconds (BlackHole 2ch plus the built-in speakers, muted meanwhile) and restore it. They need BlackHole 2ch and Microsoft Teams Audio, otherwise they skip. Afterwards no device with UID `ch.moritz.zweiklang.*` may be left.
+- Tests switch the system sound output for a few seconds (BlackHole 2ch plus the built-in speakers, muted meanwhile) and restore it. They need BlackHole 2ch and Microsoft Teams Audio, otherwise they skip. The three-output test also uses a wired output with a mute control (e.g. a USB DAC), muted meanwhile, and skips without one. Afterwards no device with UID `ch.moritz.zweiklang.*` may be left.
 - Screenshots of the menu in all languages: `TEST_RUNNER_ZWEIKLANG_SNAPSHOT_DIR=<folder> xcodebuild -project Zweiklang.xcodeproj -scheme Zweiklang test -only-testing:ZweiklangCoreTests/SnapshotTests`.
 - Translations: `Sources/ZweiklangCore/Resources/<lang>.lproj/Localizable.strings`, keys are the English texts. Use `L("…")` for strings and `T("…")` for SwiftUI text; only interpolate `String` values (placeholder `%@`). `LocalizationTests` checks that every language has every key with matching placeholders. Bluetooth prompt text: `Sources/Zweiklang/<lang>.lproj/InfoPlist.strings`.
 - App log: `/usr/bin/log show --last 1h --info --predicate 'subsystem == "ch.moritz.zweiklang"'` (in zsh, `log` is a builtin; use the full path).
@@ -60,3 +60,7 @@ Quit the app (its menu, or the `osascript` line above; quitting removes the app'
 - Microsoft Teams Audio can never be the default output (`CanBeDefaultDevice = 0`); macOS ignores such a switch without an error, so the app verifies every switch.
 - The Accessibility permission is bound to the code signature. With ad hoc signing every rebuild breaks it (tccd: "Failed to match existing code requirement") while the switch in System Settings still shows on; the app's "Allow …" button therefore resets its own entry with `tccutil` before asking again.
 - A command-line tool without `NSBluetoothAlwaysUsageDescription` is killed when it touches IOBluetooth; tests use a Bluetooth stub.
+- Timing, measured with loopback devices (BlackHole, Teams Audio) and click capture:
+  - macOS already aligns the sub-devices of a multi-output device by their reported device latency plus safety offset (it feeds slow devices early; composition key `don't pad` = 0). Adding `max latency - own latency` again would double it. The stream latency (`kAudioStreamPropertyLatency`, e.g. 639 frames of speaker processing on a MacBook Pro) is left out, so Zweiklang delays the other outputs by that difference. Unreported Bluetooth delay is up to the user's per-device slider.
+  - `latency-out` (`kAudioSubDeviceExtraOutputLatencyKey`) delays only that sub-device, counted in frames of its own sample rate. Negative values do not advance it.
+  - At runtime only rewriting `kAudioAggregateDevicePropertyComposition` takes effect (same device ID, stays the system output). `kAudioSubDevicePropertyExtraLatency` on the sub-device object (output scope) accepts a value and shows it in the composition, but the audio does not change.

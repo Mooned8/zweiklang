@@ -3,15 +3,12 @@
 "%@ failed (code %@)." = "%@ : échec (code %@).";
 "Switching the audio output" = "Changement de sortie audio";
 "Setting the volume" = "Réglage du volume";
-"Zweiklang (both headphones)" = "Zweiklang (les deux écouteurs)";
 "Creating the shared output" = "Création de la sortie partagée";
 "Activating the shared output" = "Activation de la sortie partagée";
 "Removing the shared output" = "Suppression de la sortie partagée";
 "Selecting the audio output" = "Sélection de la sortie audio";
 "Headphones %@" = "Écouteurs %@";
 "The shared output was removed." = "La sortie partagée a été supprimée.";
-"Please choose two headphones." = "Choisissez deux écouteurs.";
-"Please choose two different headphones." = "Choisissez deux écouteurs différents.";
 "Connecting headphones …" = "Connexion des écouteurs …";
 "“%@” and “%@” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again." = "Impossible de connecter « %1$@ » et « %2$@ ». Sortez les AirPods du boîtier, approchez-les du Mac et réessayez.";
 "“%@” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again." = "Impossible de connecter « %@ ». Sortez les AirPods du boîtier, approchez-les du Mac et réessayez.";
@@ -20,7 +17,6 @@
 "To use the volume keys, Zweiklang needs your permission under Accessibility." = "Pour utiliser les touches de volume, Zweiklang a besoin de votre autorisation dans Accessibilité.";
 "Allow …" = "Autoriser …";
 "Active" = "Actif";
-"Headphones" = "Écouteurs";
 "Listen together" = "Écouter ensemble";
 "Cancel" = "Annuler";
 "Please choose" = "Choisir";
@@ -36,7 +32,22 @@
 "muted" = "muet";
 "Disconnected" = "Déconnecté";
 "Reconnect" = "Reconnecter";
-"Volume keys control both" = "Les touches de volume règlent les deux";
 "Open at login" = "Ouvrir à la connexion";
 "Settings" = "Réglages";
 "Quit Zweiklang" = "Quitter Zweiklang";
+
+/* Several outputs and timing */
+"Zweiklang (shared output)" = "Zweiklang (sortie partagée)";
+"Please choose at least two outputs." = "Choisissez au moins deux sorties.";
+"Please choose different outputs." = "Choisissez des sorties différentes.";
+"These outputs could not be connected: %@. Take the AirPods out of the case, hold them near the Mac and try again." = "Impossible de connecter ces sorties : %@. Sortez les AirPods du boîtier, approchez-les du Mac et réessayez.";
+"Adjusting the timing" = "Réglage de la synchronisation";
+"Outputs" = "Sorties";
+"Add output" = "Ajouter une sortie";
+"Remove output" = "Retirer la sortie";
+"More than two Bluetooth headphones on one Mac can cause dropouts." = "Plus de deux écouteurs Bluetooth sur un même Mac peuvent provoquer des coupures.";
+"Timing" = "Synchronisation";
+"If an output plays ahead, delay it until the sound is in sync." = "Si une sortie est en avance, retardez-la jusqu’à ce que tout soit synchronisé.";
+"+%@ ms added automatically" = "+%@ ms ajoutées automatiquement";
+"Volume keys control all outputs" = "Les touches de volume règlent toutes les sorties";
+"Not available: %@. Check that the outputs are connected and switched on." = "Indisponible : %@. Vérifiez que les sorties sont branchées et allumées.";

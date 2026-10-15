@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The window that opens from the menu bar icon.
@@ -5,11 +6,17 @@ public struct MenuContentView: View {
     @Bindable var controller: SessionController
     let options: AppOptions
     let onQuit: () -> Void
+    @State private var showsTiming = false
 
     public init(controller: SessionController, options: AppOptions, onQuit: @escaping () -> Void) {
+        self.init(controller: controller, options: options, onQuit: onQuit, showsTiming: false)
+    }
+
+    init(controller: SessionController, options: AppOptions, onQuit: @escaping () -> Void, showsTiming: Bool) {
         self.controller = controller
         self.options = options
         self.onQuit = onQuit
+        _showsTiming = State(initialValue: showsTiming)
     }
 
     public var body: some View {
@@ -41,8 +48,6 @@ public struct MenuContentView: View {
         }
     }
 
-    private var slots: Range<Int> { 0..<SessionController.slotCount }
-
     // MARK: Header
 
     private var header: some View {
@@ -68,8 +73,13 @@ public struct MenuContentView: View {
     private var setupSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
-                T("Headphones").font(.caption).foregroundStyle(.secondary)
-                ForEach(slots, id: \.self, content: slotPicker)
+                T("Outputs").font(.caption).foregroundStyle(.secondary)
+                ForEach(controller.targets.indices, id: \.self, content: slotRow)
+                addOutputMenu
+            }
+            if controller.hasManyBluetoothOutputs {
+                Notice(text: L("More than two Bluetooth headphones on one Mac can cause dropouts."),
+                       systemImage: "antenna.radiowaves.left.and.right")
             }
             if case .failed(let message) = controller.phase {
                 Notice(text: message, systemImage: "exclamationmark.triangle.fill")
@@ -96,6 +106,51 @@ public struct MenuContentView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private func slotRow(_ slot: Int) -> some View {
+        HStack(spacing: 6) {
+            slotPicker(slot)
+            if controller.targets.count > SessionController.minimumSlots {
+                Button { controller.removeOutput(slot: slot) } label: {
+                    Image(systemName: "minus.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!controller.canEditOutputs)
+                .help(T("Remove output"))
+                .accessibilityLabel(T("Remove output"))
+            }
+        }
+    }
+
+    private var addOutputMenu: some View {
+        let addable = controller.addableTargets
+        let bluetooth = addable.filter { $0.bluetoothAddress != nil }
+        let others = addable.filter { $0.bluetoothAddress == nil }
+        return Menu {
+            if !bluetooth.isEmpty {
+                Section {
+                    ForEach(bluetooth) { target in Button(target.name) { controller.addOutput(target) } }
+                } header: {
+                    T("Bluetooth")
+                }
+            }
+            if !others.isEmpty {
+                Section {
+                    ForEach(others) { target in Button(target.name) { controller.addOutput(target) } }
+                } header: {
+                    T("Other outputs")
+                }
+            }
+        } label: {
+            Label { T("Add output") } icon: { Image(systemName: "plus") }
+                .font(.callout)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(addable.isEmpty || !controller.canEditOutputs)
     }
 
     private func slotPicker(_ slot: Int) -> some View {
@@ -172,14 +227,23 @@ public struct MenuContentView: View {
                 Notice(text: message, systemImage: "exclamationmark.triangle.fill",
                        action: (L("Hide"), { controller.dismissMessage() }))
             }
-            ForEach(slots, id: \.self, content: volumeRow)
-            HStack {
-                Label { T("Link sliders") } icon: { Image(systemName: "link") }.font(.callout)
-                Spacer()
-                Toggle(isOn: $controller.linked) { T("Link sliders") }
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
+            if controller.hasManyBluetoothOutputs {
+                Notice(text: L("More than two Bluetooth headphones on one Mac can cause dropouts."),
+                       systemImage: "antenna.radiowaves.left.and.right")
+            }
+            scrollingIfTall(estimatedHeight: outputControlsHeight) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(controller.chosenSlots, id: \.self, content: volumeRow)
+                    HStack {
+                        Label { T("Link sliders") } icon: { Image(systemName: "link") }.font(.callout)
+                        Spacer()
+                        Toggle(isOn: $controller.linked) { T("Link sliders") }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                    }
+                    timingSection
+                }
             }
             Button {
                 controller.stop()
@@ -229,6 +293,80 @@ public struct MenuContentView: View {
         }
     }
 
+    // MARK: Timing
+
+    private var timingSection: some View {
+        DisclosureGroup(isExpanded: $showsTiming) {
+            VStack(alignment: .leading, spacing: 10) {
+                T("If an output plays ahead, delay it until the sound is in sync.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(timingSlots, id: \.self, content: delayRow)
+            }
+            .padding(.top, 6)
+        } label: {
+            Label { T("Timing") } icon: { Image(systemName: "timer") }.font(.callout)
+        }
+    }
+
+    private func delayRow(_ slot: Int) -> some View {
+        let delay = Binding<Double>(
+            get: { controller.syncOffset(slot: slot) },
+            set: { controller.setSyncOffset($0, slot: slot) }
+        )
+        let automatic = Int(controller.automaticDelays[slot].rounded())
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(verbatim: controller.displayName(slot: slot)).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Text(verbatim: "+\(Int(controller.syncOffset(slot: slot))) ms")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            // No `step:`, it draws 80 tick marks; the controller snaps to 5 ms.
+            Slider(value: delay, in: SyncDelays.manualRange)
+                .controlSize(.small)
+                .accessibilityLabel(Text(verbatim: controller.displayName(slot: slot)))
+                .accessibilityValue(Text(verbatim: "\(Int(controller.syncOffset(slot: slot))) ms"))
+            if automatic > 0 {
+                Text(verbatim: L("+\(String(automatic)) ms added automatically"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var timingSlots: [Int] { controller.chosenSlots.filter { controller.slotDevices[$0] != nil } }
+
+    /// Rough height of the sliders block; rows have fixed layouts, so counting them is enough.
+    private var outputControlsHeight: CGFloat {
+        var height = CGFloat(controller.chosenSlots.count) * 58 + 40
+        if showsTiming {
+            height += 50 + timingSlots.reduce(0) { sum, slot in sum + (controller.automaticDelays[slot] >= 0.5 ? 70 : 56) }
+        }
+        return height
+    }
+
+    /// Room for the sliders, keeping header, notices, "Stop" and the footer on the screen.
+    private var maximumControlsHeight: CGFloat {
+        max(220, (NSScreen.main?.visibleFrame.height ?? 800) - 420)
+    }
+
+    /// Many outputs (and the open timing section) would push the buttons below off the screen; then the sliders scroll.
+    @ViewBuilder
+    private func scrollingIfTall<Content: View>(estimatedHeight: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+        if estimatedHeight > maximumControlsHeight {
+            ScrollView {
+                content().padding(.trailing, 12)
+            }
+            .frame(height: maximumControlsHeight)
+        } else {
+            content()
+        }
+    }
+
     // MARK: Footer
 
     private var footer: some View {
@@ -237,7 +375,7 @@ public struct MenuContentView: View {
                 Toggle(isOn: Binding(
                     get: { options.mediaKeysEnabled },
                     set: { options.setMediaKeysEnabled($0) }
-                )) { T("Volume keys control both") }
+                )) { T("Volume keys control all outputs") }
                 Toggle(isOn: Binding(
                     get: { options.launchAtLogin },
                     set: { options.setLaunchAtLogin($0) }

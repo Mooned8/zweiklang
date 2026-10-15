@@ -5,7 +5,7 @@ import os
 
 let log = Logger(subsystem: "ch.moritz.zweiklang", category: "session")
 
-/// A pair of headphones (or any output) the user picked for one of the two slots.
+/// Headphones (or any other output) the user picked for one of the slots.
 public struct OutputTarget: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     /// Set for Bluetooth headphones; the app can connect those itself.
@@ -38,12 +38,13 @@ public enum SessionPhase: Equatable, Sendable {
     case failed(String)
 }
 
-/// Connects both headphones, builds the multi-output device, makes it the system output
-/// and controls the two volumes.
+/// Connects the chosen outputs, builds the multi-output device, makes it the system output
+/// and controls each output's volume and timing.
 @MainActor
 @Observable
 public final class SessionController {
-    public static let slotCount = 2
+    /// The menu always shows at least this many slots, and a session needs this many outputs.
+    public static let minimumSlots = 2
 
     public private(set) var phase: SessionPhase = .idle {
         didSet {
@@ -60,6 +61,10 @@ public final class SessionController {
     public private(set) var isSelectedAsOutput = false
     /// Whether each slot's device lets us set its volume.
     public private(set) var slotHasVolume: [Bool] = [false, false]
+    /// Delay Zweiklang adds on its own per slot (ms), see `SyncDelays`. Only known while a session runs.
+    public private(set) var automaticDelays: [Double] = [0, 0]
+    /// The user's extra delay per output (ms), keyed by `OutputTarget.id`, so it follows the device.
+    public private(set) var syncOffsets: [String: Double] = [:]
     /// Notice during a running session, e.g. a failed reconnect.
     public private(set) var message: String?
     public var linked = false {
@@ -89,11 +94,15 @@ public final class SessionController {
     @ObservationIgnored private var cancelRequested = false
     @ObservationIgnored private var refreshQueued = false
     @ObservationIgnored private var volumeReadQueued = false
+    @ObservationIgnored private var delayUpdate: Task<Void, Never>?
+    /// Delays already written to the current device, so a value the HAL stores differently is not rewritten in a loop.
+    @ObservationIgnored private var submittedDelays: (device: AudioObjectID, frames: [String: Int])?
 
     private enum Keys {
         static let targets = "targets"
         static let linked = "linked"
         static let previousOutput = "previousOutputUID"
+        static let syncOffsets = "syncOffsets"
     }
 
     public init(defaults: UserDefaults, bluetooth: BluetoothProviding, multiOutputUID: String = MultiOutputDevice.defaultUID) {
@@ -104,8 +113,12 @@ public final class SessionController {
         self.linked = defaults.bool(forKey: Keys.linked)
         if let data = defaults.data(forKey: Keys.targets),
            let saved = try? JSONDecoder().decode([OutputTarget?].self, from: data),
-           saved.count == Self.slotCount {
+           saved.count >= Self.minimumSlots {
             targets = saved
+            resizeSlotArrays()
+        }
+        if let saved = defaults.dictionary(forKey: Keys.syncOffsets) as? [String: Double] {
+            syncOffsets = saved.mapValues(SyncDelays.clampManual).filter { $0.value > 0 }
         }
         installSystemListeners()
         refresh()
@@ -123,10 +136,60 @@ public final class SessionController {
     }
 
     public func select(_ target: OutputTarget?, slot: Int) {
+        guard targets.indices.contains(slot) else { return }
         targets[slot] = target
         saveTargets()
         if case .failed = phase { phase = .idle }
         refresh()
+    }
+
+    /// Slots with a chosen output, in menu order.
+    public var chosenSlots: [Int] { targets.indices.filter { targets[$0] != nil } }
+
+    /// Outputs that are not in any slot yet.
+    public var addableTargets: [OutputTarget] {
+        candidates.filter { candidate in !targets.contains { $0?.id == candidate.id } }
+    }
+
+    /// Slots can only change while no session runs.
+    public var canEditOutputs: Bool { !isBusy && phase != .active }
+
+    public func addOutput(_ target: OutputTarget) {
+        guard canEditOutputs, !targets.contains(where: { $0?.id == target.id }) else { return }
+        targets.append(target)
+        resizeSlotArrays()
+        saveTargets()
+        if case .failed = phase { phase = .idle }
+        refresh()
+    }
+
+    public func removeOutput(slot: Int) {
+        guard canEditOutputs, targets.count > Self.minimumSlots, targets.indices.contains(slot) else { return }
+        targets.remove(at: slot)
+        slotDevices.remove(at: slot)
+        volumes.remove(at: slot)
+        slotHasVolume.remove(at: slot)
+        automaticDelays.remove(at: slot)
+        saveTargets()
+        if case .failed = phase { phase = .idle }
+        refresh()
+    }
+
+    /// More than two Bluetooth headphones share one radio; macOS then often drops out.
+    public var hasManyBluetoothOutputs: Bool {
+        targets.compactMap { $0?.bluetoothAddress }.count > 2
+    }
+
+    /// Keeps the per-slot arrays as long as `targets`.
+    private func resizeSlotArrays() {
+        func fitted<T>(_ values: [T], _ filler: T) -> [T] {
+            values.count >= targets.count ? Array(values.prefix(targets.count))
+                : values + Array(repeating: filler, count: targets.count - values.count)
+        }
+        slotDevices = fitted(slotDevices, nil)
+        volumes = fitted(volumes, 0.5)
+        slotHasVolume = fitted(slotHasVolume, false)
+        automaticDelays = fitted(automaticDelays, 0)
     }
 
     /// Re-reads devices, connection state, volumes and the current system output.
@@ -151,7 +214,17 @@ public final class SessionController {
         }
         candidates = list
 
+        resizeSlotArrays()
         let devices = targets.map { target in target.flatMap { t in outputs.first(where: t.matches) } }
+        if phase == .active, isMuted, var saved = volumesBeforeMute, saved.count == devices.count {
+            for slot in devices.indices {
+                guard let device = devices[slot], slotDevices[slot]?.id != device.id else { continue }
+                // Back while muted: stays silent and gets its own level back on unmute.
+                if let level = Volume.get(device.id), level > 0.01 { saved[slot] = level }
+                try? Volume.set(0, on: device.id)
+            }
+            volumesBeforeMute = saved
+        }
         if devices.map({ $0?.id }) != slotDevices.map({ $0?.id }) {
             slotHasVolume = devices.map { $0.map { Volume.canControl($0.id) } ?? false }
         }
@@ -176,6 +249,7 @@ public final class SessionController {
             }
             syncVolumeObservers()
             readVolumes()
+            if !isBusy { applyDelays() }
         }
     }
 
@@ -185,7 +259,7 @@ public final class SessionController {
         let firstName = NSFullUserName().split(separator: " ").first.map(String.init) ?? NSUserName()
         let airPods = bluetoothTargets.filter { $0.name.localizedCaseInsensitiveContains("AirPods") }
             .sorted { $0.name.localizedCaseInsensitiveContains(firstName) && !$1.name.localizedCaseInsensitiveContains(firstName) }
-        let picks = Array((airPods.count >= 2 ? airPods : bluetoothTargets).prefix(Self.slotCount))
+        let picks = Array((airPods.count >= 2 ? airPods : bluetoothTargets).prefix(Self.minimumSlots))
         guard !picks.isEmpty else { return }
         for (slot, target) in picks.enumerated() { targets[slot] = target }
         saveTargets()
@@ -205,8 +279,9 @@ public final class SessionController {
     public var canStart: Bool { startProblem == nil }
 
     private var startProblem: String? {
-        guard let first = targets[0], let second = targets[1] else { return L("Please choose two headphones.") }
-        return first.id == second.id ? L("Please choose two different headphones.") : nil
+        let chosen = targets.compactMap { $0 }
+        guard chosen.count >= Self.minimumSlots else { return L("Please choose at least two outputs.") }
+        return Set(chosen.map(\.id)).count == chosen.count ? nil : L("Please choose different outputs.")
     }
 
     /// Starts a session, or reconnects missing headphones while one runs.
@@ -216,7 +291,7 @@ public final class SessionController {
             phase = .failed(startProblem)
             return
         }
-        guard let first = targets[0], let second = targets[1] else { return }
+        let chosen = targets.compactMap { $0 }
         isBusy = true
         cancelRequested = false
         message = nil
@@ -232,24 +307,38 @@ public final class SessionController {
             phase = .working(L("Connecting headphones …"))
         }
 
-        log.info("start: \(first.name, privacy: .private(mask: .hash)) + \(second.name, privacy: .private(mask: .hash))")
-        async let deviceA = ensureAvailable(first)
-        async let deviceB = ensureAvailable(second)
-        let devices = await [deviceA, deviceB]
+        log.info("start: \(chosen.map(\.name), privacy: .private(mask: .hash))")
+        let found = await withTaskGroup(of: (Int, AudioDevice?).self) { group in
+            for (index, target) in chosen.enumerated() {
+                group.addTask { (index, await self.ensureAvailable(target)) }
+            }
+            var found = [AudioDevice?](repeating: nil, count: chosen.count)
+            for await (index, device) in group { found[index] = device }
+            return found
+        }
         if cancelRequested { return } // stop() already cleaned up
 
-        let missing = zip([first, second], devices).filter { $0.1 == nil }.map(\.0.name)
-        guard missing.isEmpty, let a = devices[0], let b = devices[1] else {
-            let reason = missing.count > 1
-                ? L("“\(missing[0])” and “\(missing[1])” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again.")
-                : L("“\(missing[0])” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again.")
+        let missingTargets = zip(chosen, found).filter { $0.1 == nil }.map(\.0)
+        let missing = missingTargets.map(\.name)
+        guard missing.isEmpty else {
+            let reason = if missingTargets.contains(where: { $0.bluetoothAddress == nil }) {
+                L("Not available: \(missing.joined(separator: ", ")). Check that the outputs are connected and switched on.")
+            } else {
+                switch missing.count {
+                case 1: L("“\(missing[0])” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again.")
+                case 2: L("“\(missing[0])” and “\(missing[1])” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again.")
+                default: L("These outputs could not be connected: \(missing.joined(separator: ", ")). Take the AirPods out of the case, hold them near the Mac and try again.")
+                }
+            }
             failStart(wasActive: wasActive, reason: reason)
             return
         }
+        let devices = found.compactMap { $0 }
 
         if !wasActive { phase = .working(L("Setting up the shared output …")) }
         do {
-            let aggregate = try await prepareAggregate(subDeviceUIDs: [a.uid, b.uid])
+            let delays = desiredDelays(Array(zip(chosen, devices)))
+            let aggregate = try await prepareAggregate(subDeviceUIDs: devices.map(\.uid), extraLatencyFrames: delays.frames)
             if cancelRequested { cleanUpSession(); return }
             try await switchOutput(to: aggregate)
             if cancelRequested { cleanUpSession(); return }
@@ -264,7 +353,9 @@ public final class SessionController {
         }
         phase = .active
         refresh()
-        log.info("active: \(a.uid, privacy: .private(mask: .hash)) + \(b.uid, privacy: .private(mask: .hash)), volumes \(self.volumes, privacy: .private(mask: .hash))")
+        // Sample rates can change once the device runs; delays count in each device's own rate.
+        applyDelays()
+        log.info("active: \(devices.map(\.uid), privacy: .private(mask: .hash)), volumes \(self.volumes, privacy: .private(mask: .hash))")
     }
 
     /// A failed reconnect keeps a still-working session (with a notice); anything else is rolled back completely.
@@ -286,6 +377,7 @@ public final class SessionController {
     /// Ends the session (or cancels a start in progress): brings back the previous output
     /// and removes the multi-output device. Safe to call in any state.
     public func stop() {
+        delayUpdate?.cancel()
         let wasBusy = isBusy
         if wasBusy { cancelRequested = true }
         endMute()
@@ -306,6 +398,8 @@ public final class SessionController {
     }
 
     private func cleanUpSession() {
+        delayUpdate?.cancel()
+        submittedDelays = nil
         removeVolumeObservers()
         restorePreviousOutput()
         if let aggregate = aggregateDevice() {
@@ -328,7 +422,8 @@ public final class SessionController {
             return
         }
         let expected = slotDevices.compactMap { $0?.uid }
-        let isOurs = expected.count == Self.slotCount
+        let isOurs = expected.count >= Self.minimumSlots
+            && expected.count == targets.compactMap({ $0 }).count
             && Set(MultiOutputDevice.subDeviceUIDs(aggregate.id)) == Set(expected)
         if isOurs && AudioSystem.defaultOutputDeviceID() == aggregate.id {
             phase = .active
@@ -370,12 +465,13 @@ public final class SessionController {
         return nil
     }
 
-    private func prepareAggregate(subDeviceUIDs: [String]) async throws -> AudioDevice {
+    private func prepareAggregate(subDeviceUIDs: [String], extraLatencyFrames: [String: Int]) async throws -> AudioDevice {
         if let existing = aggregateDevice() {
             if existing.hasOutput, MultiOutputDevice.subDeviceUIDs(existing.id) == subDeviceUIDs { return existing }
             try MultiOutputDevice.destroy(existing.id)
         }
-        return try await MultiOutputDevice.create(subDeviceUIDs: subDeviceUIDs, uid: multiOutputUID)
+        return try await MultiOutputDevice.create(subDeviceUIDs: subDeviceUIDs, extraLatencyFrames: extraLatencyFrames,
+                                                  uid: multiOutputUID)
     }
 
     /// macOS can accept the switch without error and still keep the old output; check it really happened.
@@ -409,7 +505,9 @@ public final class SessionController {
     private func restorePreviousOutput() {
         guard let aggregate = aggregateDevice(), AudioSystem.defaultOutputDeviceID() == aggregate.id else { return }
         // Prefer headphones over speakers if the old output is gone: no film sound in the room by surprise.
-        guard let target = previousOutput() ?? slotDevices.compactMap({ $0 }).first else { return }
+        let connected = slotDevices.compactMap { $0 }
+        let headphones = connected.first { BluetoothAddress.fromDeviceUID($0.uid) != nil }
+        guard let target = previousOutput() ?? headphones ?? connected.first else { return }
         do {
             try AudioSystem.setDefaultOutputDevice(target.id)
         } catch {
@@ -445,7 +543,7 @@ public final class SessionController {
         apply(values)
     }
 
-    /// Volume keys: both headphones move by the same step, so their difference stays.
+    /// Volume keys: every output moves by the same step, so their differences stay.
     public func changeAll(by delta: Float) {
         guard phase == .active else { return }
         var base = volumes
@@ -533,6 +631,70 @@ public final class SessionController {
 
     static func clamp(_ value: Float) -> Float { min(max(value, 0), 1) }
 
+    // MARK: - Timing
+
+    public func syncOffset(slot: Int) -> Double {
+        guard targets.indices.contains(slot), let target = targets[slot] else { return 0 }
+        return syncOffsets[target.id] ?? 0
+    }
+
+    /// Extra delay for one output, saved per device. While a session runs it takes effect shortly after
+    /// the last change: every change rebuilds the device's timing, which can cause a short dropout.
+    public func setSyncOffset(_ milliseconds: Double, slot: Int) {
+        guard targets.indices.contains(slot), let target = targets[slot] else { return }
+        let value = SyncDelays.clampManual(milliseconds)
+        syncOffsets[target.id] = value > 0 ? value : nil
+        defaults.set(syncOffsets, forKey: Keys.syncOffsets)
+        delayUpdate?.cancel()
+        guard phase == .active else { return }
+        delayUpdate = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self, self.phase == .active, !self.isBusy else { return }
+            self.applyDelays()
+        }
+    }
+
+    /// Delay per output: the automatic part (ms, for display) and the frames for `latency-out`, keyed by device UID.
+    private func desiredDelays(_ outputs: [(OutputTarget, AudioDevice)]) -> (automatic: [Double], frames: [String: Int]) {
+        let timings = outputs.map { OutputTiming.read($0.1.id) }
+        let automatic = SyncDelays.automatic(timings)
+        var frames: [String: Int] = [:]
+        for (index, (target, device)) in outputs.enumerated() {
+            // Unknown rate (device busy or just vanishing): leave its delay as it is.
+            guard timings[index].sampleRate > 0 else { continue }
+            let total = automatic[index] + (syncOffsets[target.id] ?? 0)
+            frames[device.uid] = SyncDelays.frames(milliseconds: total, sampleRate: timings[index].sampleRate)
+        }
+        return (automatic, frames)
+    }
+
+    /// Brings the running device's delays in line with the wanted ones; writes only when something differs,
+    /// so the HAL notification it causes does not loop.
+    func applyDelays() {
+        guard let aggregate = aggregateDevice() else { return }
+        let slots = slotDevices.indices.filter { slotDevices[$0] != nil && targets[$0] != nil }
+        let outputs = slots.map { (targets[$0]!, slotDevices[$0]!) }
+        let delays = desiredDelays(outputs)
+        var automatic = [Double](repeating: 0, count: targets.count)
+        for (index, slot) in slots.enumerated() { automatic[slot] = delays.automatic[index] }
+        if automatic != automaticDelays { automaticDelays = automatic }
+
+        let current = MultiOutputDevice.extraLatencyFrames(aggregate.id)
+        let submitted = submittedDelays?.device == aggregate.id ? submittedDelays?.frames ?? [:] : [:]
+        let changes = delays.frames.filter { uid, frames in
+            (current[uid].map { $0 != frames } ?? false) && submitted[uid] != frames
+        }
+        guard !changes.isEmpty else { return }
+        do {
+            try MultiOutputDevice.setExtraLatency(aggregate.id, frames: changes)
+            // Only a successful write counts; a failed one is tried again on the next refresh.
+            submittedDelays = (aggregate.id, submitted.merging(changes) { $1 })
+            log.info("delays \(changes, privacy: .private(mask: .hash))")
+        } catch {
+            log.error("delays: \(error.localizedDescription, privacy: .private(mask: .hash))")
+        }
+    }
+
     // MARK: - HAL listeners
 
     private func installSystemListeners() {
@@ -553,6 +715,12 @@ public final class SessionController {
         for id in ids {
             volumeListeners += Volume.observe(id) { [weak self] in
                 MainActor.assumeIsolated { self?.scheduleVolumeRead() }
+            }
+            // Delays count in the device's own sample rate; a rate change needs new values.
+            if let listener = PropertyListener(objectID: id, address: propertyAddress(kAudioDevicePropertyNominalSampleRate), handler: { [weak self] in
+                MainActor.assumeIsolated { self?.scheduleRefresh() }
+            }) {
+                volumeListeners.append(listener)
             }
         }
     }

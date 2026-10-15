@@ -17,6 +17,10 @@ public final class VolumeHUD {
     public func show() {
         let panel = self.panel ?? makePanel()
         self.panel = panel
+        let height = VolumeHUDView.height(rows: controller.chosenSlots.count)
+        if panel.frame.height != height {
+            panel.setContentSize(NSSize(width: VolumeHUDView.width, height: height))
+        }
         if let screen = NSScreen.main {
             let frame = screen.visibleFrame
             panel.setFrameOrigin(NSPoint(x: frame.maxX - panel.frame.width - 16, y: frame.maxY - panel.frame.height - 16))
@@ -46,7 +50,7 @@ public final class VolumeHUD {
 
     private func makePanel() -> NSPanel {
         let host = NSHostingView(rootView: VolumeHUDView(controller: controller))
-        host.frame = NSRect(x: 0, y: 0, width: 280, height: 104)
+        host.frame = NSRect(x: 0, y: 0, width: VolumeHUDView.width, height: VolumeHUDView.height(rows: SessionController.minimumSlots))
         let panel = NSPanel(contentRect: host.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.contentView = host
         panel.isOpaque = false
@@ -62,12 +66,23 @@ public final class VolumeHUD {
 struct VolumeHUDView: View {
     let controller: SessionController
 
+    static let width: CGFloat = 280
+    private static let rowHeight: CGFloat = 33
+    private static let spacing: CGFloat = 10
+    private static let padding: CGFloat = 14
+
+    /// Fixed height per row, so the panel can be sized before SwiftUI lays it out.
+    static func height(rows: Int) -> CGFloat {
+        let rows = CGFloat(max(rows, 1))
+        return rows * rowHeight + (rows - 1) * spacing + 2 * padding
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(0..<SessionController.slotCount, id: \.self) { slot in
+        VStack(alignment: .leading, spacing: Self.spacing) {
+            ForEach(controller.chosenSlots, id: \.self) { slot in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Image(systemName: "airpods.pro")
+                        Image(systemName: controller.targets[slot]?.bluetoothAddress != nil ? "airpods.pro" : "hifispeaker")
                         Text(verbatim: controller.displayName(slot: slot)).lineLimit(1).truncationMode(.middle)
                         Spacer()
                         if controller.isMuted {
@@ -79,10 +94,11 @@ struct VolumeHUDView: View {
                     .font(.callout)
                     LevelBar(value: CGFloat(controller.isMuted ? 0 : controller.volumes[slot]))
                 }
+                .frame(height: Self.rowHeight)
             }
         }
-        .padding(14)
-        .frame(width: 280, height: 104)
+        .padding(Self.padding)
+        .frame(width: Self.width, height: Self.height(rows: controller.chosenSlots.count))
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 }

@@ -39,6 +39,9 @@ final class SnapshotTests: XCTestCase {
         let options = AppOptions(defaults: defaults, controller: controller)
         let menu = MenuContentView(controller: controller, options: options, onQuit: {})
         try render(menu, to: "1-bereit.png", in: directory)
+        controller.addOutput(OutputTarget(name: "Carla’s AirPods", bluetoothAddress: "AA-BB-CC-DD-EE-03"))
+        try render(menu, to: "1b-drei-ausgaenge.png", in: directory)
+        controller.removeOutput(slot: 2)
 
         controller.connectTimeout = 0.1
         await controller.start()
@@ -49,7 +52,6 @@ final class SnapshotTests: XCTestCase {
         let b = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
         let speakerMute = propertyAddress(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
         let muteBefore = HAL.value(b.id, speakerMute, initial: UInt32(0)) ?? 0
-        try HAL.setValue(b.id, speakerMute, UInt32(1), operation: "mute")
         let outputBefore = try XCTUnwrap(AudioSystem.defaultOutputDeviceID())
         let volumesBefore = [Volume.get(a.id), Volume.get(b.id)]
         defer {
@@ -59,6 +61,7 @@ final class SnapshotTests: XCTestCase {
             if let v = volumesBefore[1] { try? Volume.set(v, on: b.id) }
             try? HAL.setValue(b.id, speakerMute, muteBefore, operation: "unmute")
         }
+        try HAL.setValue(b.id, speakerMute, UInt32(1), operation: "mute")
         controller.select(OutputTarget(name: "Anna’s AirPods Pro", deviceUID: a.uid), slot: 0)
         controller.select(OutputTarget(name: "Ben’s AirPods Pro", deviceUID: b.uid), slot: 1)
         await controller.start()
@@ -67,6 +70,9 @@ final class SnapshotTests: XCTestCase {
         controller.setVolume(0.4, slot: 1)
         try render(menu, to: "3-aktiv.png", in: directory)
         try render(VolumeHUDView(controller: controller), to: "4-tasten-anzeige.png", in: directory)
+        controller.setSyncOffset(40, slot: 1)
+        try render(MenuContentView(controller: controller, options: options, onQuit: {}, showsTiming: true),
+                   to: "5-zeitabgleich.png", in: directory)
 
         // Every language once, to spot texts that do not fit.
         let original = Bundle.zweiklang
@@ -74,7 +80,7 @@ final class SnapshotTests: XCTestCase {
         for language in ["en", "de", "es", "fr", "it", "nl", "pt"] {
             let path = try XCTUnwrap(original.path(forResource: language, ofType: "lproj"))
             Bundle.zweiklang = try XCTUnwrap(Bundle(path: path))
-            try render(MenuContentView(controller: controller, options: options, onQuit: {}),
+            try render(MenuContentView(controller: controller, options: options, onQuit: {}, showsTiming: true),
                        to: "sprache-\(language).png", in: directory)
         }
 

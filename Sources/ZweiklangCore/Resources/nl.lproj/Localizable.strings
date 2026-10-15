@@ -3,15 +3,12 @@
 "%@ failed (code %@)." = "%@ mislukt (code %@).";
 "Switching the audio output" = "Audio-uitvoer wijzigen";
 "Setting the volume" = "Volume instellen";
-"Zweiklang (both headphones)" = "Zweiklang (beide koptelefoons)";
 "Creating the shared output" = "Gedeelde uitvoer aanmaken";
 "Activating the shared output" = "Gedeelde uitvoer activeren";
 "Removing the shared output" = "Gedeelde uitvoer verwijderen";
 "Selecting the audio output" = "Audio-uitvoer selecteren";
 "Headphones %@" = "Koptelefoon %@";
 "The shared output was removed." = "De gedeelde uitvoer is verwijderd.";
-"Please choose two headphones." = "Kies twee koptelefoons.";
-"Please choose two different headphones." = "Kies twee verschillende koptelefoons.";
 "Connecting headphones …" = "Koptelefoons verbinden …";
 "“%@” and “%@” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again." = "“%1$@” en “%2$@” konden niet worden verbonden. Haal de AirPods uit de case, houd ze bij de Mac en probeer het opnieuw.";
 "“%@” could not be connected. Take the AirPods out of the case, hold them near the Mac and try again." = "“%@” kon niet worden verbonden. Haal de AirPods uit de case, houd ze bij de Mac en probeer het opnieuw.";
@@ -20,7 +17,6 @@
 "To use the volume keys, Zweiklang needs your permission under Accessibility." = "Voor de volumetoetsen heeft Zweiklang je toestemming nodig bij Toegankelijkheid.";
 "Allow …" = "Sta toe …";
 "Active" = "Actief";
-"Headphones" = "Koptelefoons";
 "Listen together" = "Samen luisteren";
 "Cancel" = "Annuleer";
 "Please choose" = "Kies";
@@ -36,7 +32,22 @@
 "muted" = "gedempt";
 "Disconnected" = "Verbinding verbroken";
 "Reconnect" = "Opnieuw verbinden";
-"Volume keys control both" = "Volumetoetsen regelen beide";
 "Open at login" = "Open bij inloggen";
 "Settings" = "Instellingen";
 "Quit Zweiklang" = "Stop Zweiklang";
+
+/* Several outputs and timing */
+"Zweiklang (shared output)" = "Zweiklang (gedeelde uitvoer)";
+"Please choose at least two outputs." = "Kies minstens twee uitvoerapparaten.";
+"Please choose different outputs." = "Kies verschillende uitvoerapparaten.";
+"These outputs could not be connected: %@. Take the AirPods out of the case, hold them near the Mac and try again." = "Deze uitvoerapparaten konden niet worden verbonden: %@. Haal de AirPods uit de case, houd ze bij de Mac en probeer het opnieuw.";
+"Adjusting the timing" = "Timing aanpassen";
+"Outputs" = "Uitvoer";
+"Add output" = "Uitvoer toevoegen";
+"Remove output" = "Uitvoer verwijderen";
+"More than two Bluetooth headphones on one Mac can cause dropouts." = "Meer dan twee Bluetooth-koptelefoons op één Mac kunnen haperingen veroorzaken.";
+"Timing" = "Timing";
+"If an output plays ahead, delay it until the sound is in sync." = "Loopt een uitvoer voor, vertraag die dan tot alles gelijk klinkt.";
+"+%@ ms added automatically" = "+%@ ms automatisch toegevoegd";
+"Volume keys control all outputs" = "Volumetoetsen regelen alle uitvoer";
+"Not available: %@. Check that the outputs are connected and switched on." = "Niet beschikbaar: %@. Controleer of de uitvoerapparaten zijn aangesloten en aanstaan.";

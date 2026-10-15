@@ -44,6 +44,35 @@ final class OutputTargetTests: XCTestCase {
     }
 }
 
+final class SyncDelaysTests: XCTestCase {
+    func testAutomaticDelayEvensOutStreamLatency() {
+        let speakers = OutputTiming(sampleRate: 44100, streamLatencyFrames: 639) // MacBook speaker DSP
+        let airPods = OutputTiming(sampleRate: 48000, streamLatencyFrames: 0)
+        let delays = SyncDelays.automatic([airPods, speakers, airPods])
+        XCTAssertEqual(delays[0], 639 / 44.1, accuracy: 0.01)
+        XCTAssertEqual(delays[1], 0)
+        XCTAssertEqual(delays[2], delays[0])
+        XCTAssertEqual(SyncDelays.automatic([airPods, airPods]), [0, 0])
+        XCTAssertEqual(SyncDelays.automatic([]), [])
+    }
+
+    func testFramesUseTheDevicesOwnSampleRate() {
+        XCTAssertEqual(SyncDelays.frames(milliseconds: 100, sampleRate: 48000), 4800)
+        XCTAssertEqual(SyncDelays.frames(milliseconds: 100, sampleRate: 44100), 4410)
+        XCTAssertEqual(SyncDelays.frames(milliseconds: -20, sampleRate: 48000), 0) // latency-out cannot advance
+        XCTAssertEqual(SyncDelays.frames(milliseconds: 50, sampleRate: 0), 0)
+        XCTAssertEqual(SyncDelays.frames(milliseconds: .nan, sampleRate: 48000), 0)
+    }
+
+    func testManualOffsetSnapsToStepsWithinRange() {
+        XCTAssertEqual(SyncDelays.clampManual(42), 40)
+        XCTAssertEqual(SyncDelays.clampManual(43), 45)
+        XCTAssertEqual(SyncDelays.clampManual(-10), 0)
+        XCTAssertEqual(SyncDelays.clampManual(9_000), SyncDelays.manualRange.upperBound)
+        XCTAssertEqual(SyncDelays.clampManual(.infinity), 0)
+    }
+}
+
 final class MediaKeyParsingTests: XCTestCase {
     private func data1(key: Int, down: Bool, repeating: Bool = false) -> Int {
         (key << 16) | ((down ? 0xA : 0xB) << 8) | (repeating ? 1 : 0)
@@ -120,6 +149,32 @@ final class CoreAudioTests: XCTestCase {
         try MultiOutputDevice.destroy(device.id)
         XCTAssertNil(AudioSystem.device(uid: testUID))
     }
+
+    /// Three sub-devices with their own delay; a delay changes in place while the device exists.
+    func testDelaysAreSetPerSubDeviceAndChangeInPlace() async throws {
+        let (a, b) = try VirtualDevices.require()
+        let speakers = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
+        let uids = [a.uid, b.uid, speakers.uid]
+        let device = try await MultiOutputDevice.create(subDeviceUIDs: uids, extraLatencyFrames: [b.uid: 4800, speakers.uid: -5],
+                                                        uid: testUID, name: "Zweiklang Test")
+        XCTAssertEqual(MultiOutputDevice.subDeviceUIDs(device.id), uids)
+        XCTAssertEqual(MultiOutputDevice.extraLatencyFrames(device.id), [a.uid: 0, b.uid: 4800, speakers.uid: 0])
+
+        try MultiOutputDevice.setExtraLatency(device.id, frames: [a.uid: 2400, b.uid: 0])
+        XCTAssertEqual(MultiOutputDevice.extraLatencyFrames(device.id), [a.uid: 2400, b.uid: 0, speakers.uid: 0])
+        // Same device, same layout: nothing for the system output to lose.
+        XCTAssertEqual(AudioSystem.device(uid: testUID)?.id, device.id)
+        XCTAssertTrue(MultiOutputDevice.isStacked(device.id))
+        XCTAssertEqual(MultiOutputDevice.subDeviceUIDs(device.id), uids)
+        try MultiOutputDevice.destroy(device.id)
+    }
+
+    func testReadsStreamLatencyAndRate() throws {
+        let speakers = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
+        let timing = OutputTiming.read(speakers.id)
+        XCTAssertGreaterThan(timing.sampleRate, 0)
+        XCTAssertLessThan(timing.streamLatencyMilliseconds, 100)
+    }
 }
 
 // MARK: - Session flow with virtual devices
@@ -180,7 +235,91 @@ final class SessionControllerTests: XCTestCase {
         controller.select(target, slot: 0)
         controller.select(target, slot: 1)
         await controller.start()
-        XCTAssertEqual(controller.phase, .failed(L("Please choose two different headphones.")))
+        XCTAssertEqual(controller.phase, .failed(L("Please choose different outputs.")))
+    }
+
+    func testNeedsAtLeastTwoChosenOutputs() async {
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        controller.select(nil, slot: 1)
+        XCTAssertFalse(controller.canStart)
+        await controller.start()
+        XCTAssertEqual(controller.phase, .failed(L("Please choose at least two outputs.")))
+        // An empty extra slot does not block a start.
+        controller.select(OutputTarget(name: "BlackHole", deviceUID: VirtualDevices.first), slot: 1)
+        controller.addOutput(OutputTarget(name: "Spare", deviceUID: "spare"))
+        controller.select(nil, slot: 2)
+        XCTAssertTrue(controller.canStart)
+    }
+
+    func testAddsAndRemovesOutputsAndKeepsThem() {
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        let speakers = OutputTarget(name: "Speakers", deviceUID: "BuiltInSpeakerDevice")
+        XCTAssertTrue(controller.addableTargets.contains { $0.id == speakers.id })
+        controller.addOutput(speakers)
+        controller.addOutput(speakers) // already there
+        XCTAssertEqual(controller.targets.count, 3)
+        XCTAssertFalse(controller.addableTargets.contains { $0.id == speakers.id })
+        XCTAssertEqual([controller.slotDevices.count, controller.volumes.count, controller.slotHasVolume.count,
+                        controller.automaticDelays.count], [3, 3, 3, 3])
+        XCTAssertEqual(controller.slotDevices[2]?.uid, "BuiltInSpeakerDevice")
+
+        let relaunched = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        XCTAssertEqual(relaunched.targets.map { $0?.id }, controller.targets.map { $0?.id })
+
+        controller.removeOutput(slot: 0)
+        XCTAssertEqual(controller.targets.map { $0?.id }, ["bt:aabbccddee02", speakers.id])
+        XCTAssertEqual(controller.slotDevices[1]?.uid, "BuiltInSpeakerDevice")
+        controller.removeOutput(slot: 0) // two slots stay
+        XCTAssertEqual(controller.targets.count, 2)
+        XCTAssertEqual(controller.slotDevices.count, 2)
+    }
+
+    func testLoadsTwoSlotSettingsOfVersion12() throws {
+        let saved: [OutputTarget?] = [OutputTarget(name: "A", deviceUID: "a"), nil]
+        defaults.set(try JSONEncoder().encode(saved), forKey: "targets")
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        XCTAssertEqual(controller.targets.map { $0?.name }, ["A", nil])
+    }
+
+    func testManyBluetoothHeadphonesShowAHint() {
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        XCTAssertFalse(controller.hasManyBluetoothOutputs)
+        controller.addOutput(OutputTarget(name: "AirPods C", bluetoothAddress: "AA-BB-CC-DD-EE-03"))
+        XCTAssertTrue(controller.hasManyBluetoothOutputs)
+    }
+
+    func testDelayIsSavedPerDevice() {
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        controller.setSyncOffset(42, slot: 1)
+        XCTAssertEqual(controller.syncOffset(slot: 1), 40)
+        XCTAssertEqual(controller.syncOffset(slot: 0), 0)
+        // The value belongs to the device, not to the slot.
+        let device = controller.targets[1]
+        controller.select(nil, slot: 1)
+        controller.select(device, slot: 0)
+        XCTAssertEqual(controller.syncOffset(slot: 0), 40)
+        let relaunched = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        XCTAssertEqual(relaunched.syncOffset(slot: 0), 40)
+        controller.setSyncOffset(0, slot: 0)
+        XCTAssertTrue(controller.syncOffsets.isEmpty)
+    }
+
+    func testFailsCleanlyWhenOneOfThreeDoesNotConnect() async throws {
+        let (a, _) = try VirtualDevices.require()
+        let bluetooth = StubBluetooth()
+        let controller = SessionController(defaults: defaults, bluetooth: bluetooth, multiOutputUID: testUID)
+        controller.connectTimeout = 0.1
+        controller.select(OutputTarget(name: a.name, deviceUID: a.uid), slot: 0)
+        controller.select(OutputTarget(name: "Speakers", deviceUID: "BuiltInSpeakerDevice"), slot: 1)
+        controller.addOutput(OutputTarget(name: "AirPods Test C", bluetoothAddress: "AA-BB-CC-DD-EE-03"))
+        let outputBefore = AudioSystem.defaultOutputDeviceID()
+        await controller.start()
+        guard case .failed(let message) = controller.phase else { return XCTFail("expected failure, got \(controller.phase)") }
+        XCTAssertTrue(message.contains("AirPods Test C"), message)
+        XCTAssertFalse(message.contains(a.name), message)
+        XCTAssertEqual(bluetooth.connectCalls, ["AA-BB-CC-DD-EE-03"])
+        XCTAssertNil(AudioSystem.device(uid: testUID))
+        XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), outputBefore)
     }
 
     func testStopWhileConnectingCancelsTheStart() async throws {
@@ -219,7 +358,6 @@ final class SessionControllerTests: XCTestCase {
         let b = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
         let speakerMute = propertyAddress(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
         let speakerMuteBefore = try XCTUnwrap(HAL.value(b.id, speakerMute, initial: UInt32(0)))
-        try HAL.setValue(b.id, speakerMute, UInt32(1), operation: "mute speakers")
         let outputBefore = try XCTUnwrap(AudioSystem.defaultOutputDeviceID())
         let volumesBefore = [Volume.get(a.id), Volume.get(b.id)]
         defer {
@@ -228,6 +366,7 @@ final class SessionControllerTests: XCTestCase {
             if let v = volumesBefore[1] { try? Volume.set(v, on: b.id) }
             try? HAL.setValue(b.id, speakerMute, speakerMuteBefore, operation: "restore speaker mute")
         }
+        try HAL.setValue(b.id, speakerMute, UInt32(1), operation: "mute speakers")
 
         let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
         controller.select(OutputTarget(name: a.name, deviceUID: a.uid), slot: 0)
@@ -237,6 +376,12 @@ final class SessionControllerTests: XCTestCase {
         let aggregate = try XCTUnwrap(AudioSystem.device(uid: testUID))
         XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), aggregate.id)
         XCTAssertTrue(controller.isSelectedAsOutput)
+        // BlackHole waits for the speakers' signal processing (stream latency); macOS aligns the rest itself.
+        let speakerStream = OutputTiming.read(b.id).streamLatencyMilliseconds
+        XCTAssertEqual(controller.automaticDelays[0], speakerStream, accuracy: 0.01)
+        XCTAssertEqual(controller.automaticDelays[1], 0)
+        XCTAssertEqual(MultiOutputDevice.extraLatencyFrames(aggregate.id)[a.uid],
+                       SyncDelays.frames(milliseconds: speakerStream, sampleRate: OutputTiming.read(a.id).sampleRate))
 
         // Independent sliders
         controller.setVolume(0.3, slot: 0)
@@ -309,7 +454,17 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertTrue(controller.handleMediaKey(mute))
         XCTAssertFalse(controller.isMuted)
         XCTAssertEqual(try XCTUnwrap(Volume.get(a.id)), levelA, accuracy: 0.02)
+
+        // An output that comes back while muted stays silent and gets its own level back on unmute
+        XCTAssertTrue(controller.handleMediaKey(mute))
+        try Volume.set(0.6, on: b.id)
         controller.select(original, slot: 1)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(controller.isMuted)
+        XCTAssertEqual(try XCTUnwrap(Volume.get(b.id)), 0, accuracy: 0.01)
+        XCTAssertTrue(controller.handleMediaKey(mute))
+        XCTAssertEqual(try XCTUnwrap(Volume.get(b.id)), 0.6, accuracy: 0.02)
+        XCTAssertEqual(try XCTUnwrap(Volume.get(a.id)), levelA, accuracy: 0.02)
         controller.dismissMessage()
 
         // Relaunch adopts the running session
@@ -319,6 +474,78 @@ final class SessionControllerTests: XCTestCase {
 
         controller.stop()
         XCTAssertEqual(controller.phase, .idle)
+        XCTAssertNil(AudioSystem.device(uid: testUID))
+        XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), outputBefore)
+    }
+
+    /// A third output that can be the system output and can be muted (e.g. a USB DAC), muted for the test.
+    private func silentThirdOutput(excluding: Set<String>) -> AudioDevice? {
+        let mute = propertyAddress(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
+        return AudioSystem.outputDevices().first { device in
+            !excluding.contains(device.uid) && device.canBeDefaultOutput
+                && BluetoothAddress.fromDeviceUID(device.uid) == nil && HAL.isSettable(device.id, mute)
+        }
+    }
+
+    /// Three outputs: BlackHole, the built-in speakers and a third wired output, both muted meanwhile.
+    func testThreeOutputsShareVolumeKeysAndTiming() async throws {
+        let (a, _) = try VirtualDevices.require()
+        let b = try XCTUnwrap(AudioSystem.device(uid: "BuiltInSpeakerDevice"))
+        guard let c = silentThirdOutput(excluding: [a.uid, b.uid, VirtualDevices.second]) else {
+            throw XCTSkip("needs a third output with a mute control, e.g. a USB DAC")
+        }
+        let devices = [a, b, c]
+        let mute = propertyAddress(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
+        let muteBefore = try [b, c].map { try XCTUnwrap(HAL.value($0.id, mute, initial: UInt32(0)), $0.name) }
+        let outputBefore = try XCTUnwrap(AudioSystem.defaultOutputDeviceID())
+        let volumesBefore = devices.map { Volume.get($0.id) }
+        // Cleanup first, so a failing step below cannot leave the speakers muted.
+        defer {
+            if AudioSystem.defaultOutputDeviceID() != outputBefore { try? AudioSystem.setDefaultOutputDevice(outputBefore) }
+            for (device, volume) in zip(devices, volumesBefore) { if let volume { try? Volume.set(volume, on: device.id) } }
+            for (device, value) in zip([b, c], muteBefore) { try? HAL.setValue(device.id, mute, value, operation: "restore mute") }
+        }
+        for device in [b, c] { try HAL.setValue(device.id, mute, UInt32(1), operation: "mute") }
+
+        let controller = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        controller.select(OutputTarget(name: a.name, deviceUID: a.uid), slot: 0)
+        controller.select(OutputTarget(name: b.name, deviceUID: b.uid), slot: 1)
+        controller.addOutput(OutputTarget(name: c.name, deviceUID: c.uid))
+        await controller.start()
+        XCTAssertEqual(controller.phase, .active)
+        let aggregate = try XCTUnwrap(AudioSystem.device(uid: testUID))
+        XCTAssertEqual(Set(MultiOutputDevice.subDeviceUIDs(aggregate.id)), Set(devices.map(\.uid)))
+        XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), aggregate.id)
+        XCTAssertEqual(controller.chosenSlots, [0, 1, 2])
+
+        // Every output that has a volume control moves by the same step.
+        let controllable = controller.chosenSlots.filter { controller.slotHasVolume[$0] }
+        for slot in controllable { controller.setVolume(0.5, slot: slot) }
+        XCTAssertTrue(controller.handleMediaKey(MediaKeyEvent(key: .volumeUp, isDown: true, isRepeat: false, isFine: false)))
+        for slot in controllable {
+            XCTAssertEqual(try XCTUnwrap(Volume.get(devices[slot].id)), 0.5 + 1 / 16, accuracy: 0.02, devices[slot].name)
+        }
+        controller.linked = true
+        controller.setVolume(0.3, slot: 0)
+        for slot in controllable { XCTAssertEqual(controller.volumes[slot], 0.3, accuracy: 0.02) }
+        controller.linked = false
+
+        // A delay for one output takes effect on the running device, without rebuilding it.
+        controller.setSyncOffset(120, slot: 2)
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let expected = SyncDelays.frames(milliseconds: 120 + controller.automaticDelays[2],
+                                         sampleRate: OutputTiming.read(c.id).sampleRate)
+        XCTAssertEqual(MultiOutputDevice.extraLatencyFrames(aggregate.id)[c.uid], expected)
+        XCTAssertEqual(AudioSystem.device(uid: testUID)?.id, aggregate.id)
+        XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), aggregate.id)
+        XCTAssertEqual(controller.phase, .active)
+
+        // Relaunch adopts a session of three.
+        let relaunched = SessionController(defaults: defaults, bluetooth: StubBluetooth(), multiOutputUID: testUID)
+        relaunched.recoverOnLaunch()
+        XCTAssertEqual(relaunched.phase, .active)
+
+        controller.stop()
         XCTAssertNil(AudioSystem.device(uid: testUID))
         XCTAssertEqual(AudioSystem.defaultOutputDeviceID(), outputBefore)
     }
