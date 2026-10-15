@@ -70,3 +70,5 @@
 "Put both AirPods in the case, open the lid and hold the button on the back until the light flashes white (AirPods 4 and AirPods Pro 3: double-tap the front of the case). Then click Connect next to them in Bluetooth settings." = "Pon los dos AirPods en el estuche, abre la tapa y mantén pulsado el botón trasero hasta que la luz parpadee en blanco (AirPods 4 y AirPods Pro 3: toca dos veces la parte delantera del estuche). Luego haz clic en Conectar junto a ellos en los ajustes de Bluetooth.";
 "Open Bluetooth settings" = "Abrir ajustes de Bluetooth";
 "“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "No se pudo recuperar «%@» automáticamente. Puede que esté sonando en otro dispositivo, como un iPhone.";
+"Quit" = "Salir";
+"Close" = "Cerrar";

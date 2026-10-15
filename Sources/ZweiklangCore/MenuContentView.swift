@@ -13,11 +13,13 @@ public struct MenuContentView: View {
         self.init(controller: controller, options: options, onQuit: onQuit, showsTiming: false)
     }
 
-    init(controller: SessionController, options: AppOptions, onQuit: @escaping () -> Void, showsTiming: Bool) {
+    init(controller: SessionController, options: AppOptions, onQuit: @escaping () -> Void,
+         showsTiming: Bool, showsPairingHelp: Bool = false) {
         self.controller = controller
         self.options = options
         self.onQuit = onQuit
         _showsTiming = State(initialValue: showsTiming)
+        _showsPairingHelp = State(initialValue: showsPairingHelp)
     }
 
     public var body: some View {
@@ -47,6 +49,8 @@ public struct MenuContentView: View {
             controller.menuOpened()
             options.refresh()
         }
+        // A pairing hint from last time should not greet the user again.
+        .onDisappear { showsPairingHelp = false }
     }
 
     // MARK: Header
@@ -89,7 +93,8 @@ public struct MenuContentView: View {
                     action: (L("Open Bluetooth settings"), {
                         showsPairingHelp = false
                         openBluetoothSettings()
-                    })
+                    }),
+                    onClose: { showsPairingHelp = false }
                 )
             }
             if case .failed(let message) = controller.phase {
@@ -161,7 +166,7 @@ public struct MenuContentView: View {
                 }
             }
             if !addable.isEmpty { Divider() }
-            Button { showsPairingHelp = true } label: { T("Pair new AirPods …") }
+            Button { showsPairingHelp.toggle() } label: { T("Pair new AirPods …") }
         } label: {
             Label { T("Add output") } icon: { Image(systemName: "plus") }
                 .font(.callout)
@@ -205,7 +210,7 @@ public struct MenuContentView: View {
             .pickerStyle(.inline)
             .labelsHidden()
             Divider()
-            Button { showsPairingHelp = true } label: { T("Pair new AirPods …") }
+            Button { showsPairingHelp.toggle() } label: { T("Pair new AirPods …") }
         } label: {
             HStack(spacing: 8) {
                 Circle()
@@ -416,23 +421,30 @@ public struct MenuContentView: View {
             } label: {
                 Image(systemName: "gearshape")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
             .menuIndicator(.hidden)
             .fixedSize()
             .help(T("Settings"))
+            .accessibilityLabel(T("Settings"))
             Spacer()
-            Button(action: onQuit) { T("Quit Zweiklang") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
+            Button(action: onQuit) {
+                Label { T("Quit") } icon: { Image(systemName: "power") }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(T("Quit Zweiklang"))
         }
     }
 }
 
-/// Small tinted box for hints and errors, optionally with one button.
+/// Small tinted box for hints and errors, optionally with one button and a close cross.
 private struct Notice: View {
     let text: String
     let systemImage: String
     var action: (title: String, run: () -> Void)?
+    var onClose: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -444,6 +456,15 @@ private struct Notice: View {
                 }
             }
             Spacer(minLength: 0)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help(T("Close"))
+                .accessibilityLabel(T("Close"))
+            }
         }
         .padding(10)
         .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
