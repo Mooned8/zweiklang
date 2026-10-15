@@ -115,6 +115,8 @@ public protocol BluetoothProviding: AnyObject {
     func isConnected(address: String) -> Bool
     /// Closes the link and waits until it is down, so the headphones are free for another device.
     func disconnect(address: String, timeout: TimeInterval) async -> Bool
+    /// A close is still running (it can outlast `disconnect`'s wait); the link and sound device go away any moment.
+    func isClosing(address: String) -> Bool
     /// Battery levels of connected headphones, keyed by `BluetoothAddress.normalized`.
     func batteryLevels() async -> [String: BatteryLevel]
     /// Called when any Bluetooth link comes up or goes down.
@@ -210,6 +212,10 @@ public final class BluetoothConnector: NSObject, BluetoothProviding {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return !device.isConnected()
+    }
+
+    public func isClosing(address: String) -> Bool {
+        closing[BluetoothAddress.normalized(address)] != nil
     }
 
     public func batteryLevels() async -> [String: BatteryLevel] {
