@@ -47,8 +47,6 @@
 "Remove output" = "Uitvoer verwijderen";
 "More than two Bluetooth headphones on one Mac can cause dropouts." = "Meer dan twee Bluetooth-koptelefoons op één Mac kunnen haperingen veroorzaken.";
 "Timing" = "Timing";
-"If an output plays ahead, delay it until the sound is in sync." = "Loopt een uitvoer voor, vertraag die dan tot alles gelijk klinkt.";
-"+%@ ms added automatically" = "+%@ ms automatisch toegevoegd";
 "Volume keys control all outputs" = "Volumetoetsen regelen alle uitvoer";
 "Not available: %@. Check that the outputs are connected and switched on." = "Niet beschikbaar: %@. Controleer of de uitvoerapparaten zijn aangesloten en aanstaan.";
 
@@ -72,3 +70,6 @@
 "“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "“%@” kon niet automatisch worden teruggehaald. Misschien spelen ze af op een ander apparaat, zoals een iPhone.";
 "Quit" = "Stop";
 "Close" = "Sluiten";
+"Zweiklang evens out the delays the devices report. If an output still plays ahead, delay it here." = "Zweiklang compenseert de vertragingen die de apparaten melden. Speelt een uitvoer toch te vroeg, vertraag hem dan hier.";
+"%@ ms automatic + %@ ms from you. Waits for the sound processing of “%@”." = "%1$@ ms automatisch + %2$@ ms van jou. Wacht op de geluidsverwerking van “%3$@”.";
+"%@ ms automatic + %@ ms from you. Plays last because of its own sound processing (%@ ms)." = "%1$@ ms automatisch + %2$@ ms van jou. Speelt als laatste door de eigen geluidsverwerking (%3$@ ms).";

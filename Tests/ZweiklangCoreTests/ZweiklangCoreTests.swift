@@ -486,6 +486,10 @@ final class SessionControllerTests: XCTestCase {
         let speakerStream = OutputTiming.read(b.id).streamLatencyMilliseconds
         XCTAssertEqual(controller.automaticDelays[0], speakerStream, accuracy: 0.01)
         XCTAssertEqual(controller.automaticDelays[1], 0)
+        // The menu explains it: the speakers are the output the others wait for, because of their own processing.
+        XCTAssertEqual(controller.processingDelays[1], speakerStream, accuracy: 0.01)
+        XCTAssertEqual(controller.processingDelays[0], 0, accuracy: 0.01)
+        XCTAssertEqual(controller.timingReferenceSlot, speakerStream >= 0.5 ? 1 : nil)
         XCTAssertEqual(MultiOutputDevice.extraLatencyFrames(aggregate.id)[a.uid],
                        SyncDelays.frames(milliseconds: speakerStream, sampleRate: OutputTiming.read(a.id).sampleRate))
 

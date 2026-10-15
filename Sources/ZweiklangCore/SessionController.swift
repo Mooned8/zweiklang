@@ -80,6 +80,8 @@ public final class SessionController {
     public private(set) var slotHasVolume: [Bool] = [false, false]
     /// Delay Zweiklang adds on its own per slot (ms), see `SyncDelays`. Only known while a session runs.
     public private(set) var automaticDelays: [Double] = [0, 0]
+    /// Each output's own sound processing (stream latency) in ms; what the automatic delays even out.
+    public private(set) var processingDelays: [Double] = [0, 0]
     /// The user's extra delay per output (ms), keyed by `OutputTarget.id`, so it follows the device.
     public private(set) var syncOffsets: [String: Double] = [:]
     /// Notice during a running session, e.g. a failed reconnect.
@@ -273,6 +275,7 @@ public final class SessionController {
         volumes.remove(at: slot)
         slotHasVolume.remove(at: slot)
         automaticDelays.remove(at: slot)
+        processingDelays.remove(at: slot)
         slotStatus.remove(at: slot)
         slotBattery.remove(at: slot)
         presentTargetIDs.remove(at: slot)
@@ -299,6 +302,7 @@ public final class SessionController {
         volumes = fitted(volumes, 0.5)
         slotHasVolume = fitted(slotHasVolume, false)
         automaticDelays = fitted(automaticDelays, 0)
+        processingDelays = fitted(processingDelays, 0)
         if slotStatus.count != targets.count { slotStatus = fitted(slotStatus, .none) }
         if slotBattery.count != targets.count { slotBattery = fitted(slotBattery, nil) }
         presentTargetIDs = fitted(presentTargetIDs, nil)
@@ -1222,8 +1226,17 @@ public final class SessionController {
         }
     }
 
-    /// Delay per output: the automatic part (ms, for display) and the frames for `latency-out`, keyed by device UID.
-    private func desiredDelays(_ outputs: [(OutputTarget, AudioDevice)]) -> (automatic: [Double], frames: [String: Int]) {
+    /// The output the others wait for: the one with the longest own sound processing, if anyone waits at all.
+    public var timingReferenceSlot: Int? {
+        let slots = chosenSlots.filter { slotDevices[$0] != nil }
+        guard slots.contains(where: { automaticDelays[$0] >= 0.5 }) else { return nil }
+        return slots.max { processingDelays[$0] < processingDelays[$1] }
+    }
+
+    /// Delay per output: the automatic part and the own processing (ms, for display) and the frames for
+    /// `latency-out`, keyed by device UID.
+    private func desiredDelays(_ outputs: [(OutputTarget, AudioDevice)])
+        -> (automatic: [Double], processing: [Double], frames: [String: Int]) {
         let timings = outputs.map { OutputTiming.read($0.1.id) }
         let automatic = SyncDelays.automatic(timings)
         var frames: [String: Int] = [:]
@@ -1233,7 +1246,7 @@ public final class SessionController {
             let total = automatic[index] + (syncOffsets[target.id] ?? 0)
             frames[device.uid] = SyncDelays.frames(milliseconds: total, sampleRate: timings[index].sampleRate)
         }
-        return (automatic, frames)
+        return (automatic, timings.map(\.streamLatencyMilliseconds), frames)
     }
 
     /// Brings the running device's delays in line with the wanted ones; writes only when something differs,
@@ -1244,8 +1257,13 @@ public final class SessionController {
         let outputs = slots.map { (targets[$0]!, slotDevices[$0]!) }
         let delays = desiredDelays(outputs)
         var automatic = [Double](repeating: 0, count: targets.count)
-        for (index, slot) in slots.enumerated() { automatic[slot] = delays.automatic[index] }
+        var processing = [Double](repeating: 0, count: targets.count)
+        for (index, slot) in slots.enumerated() {
+            automatic[slot] = delays.automatic[index]
+            processing[slot] = delays.processing[index]
+        }
         if automatic != automaticDelays { automaticDelays = automatic }
+        if processing != processingDelays { processingDelays = processing }
 
         let current = MultiOutputDevice.extraLatencyFrames(aggregate.id)
         let submitted = submittedDelays?.device == aggregate.id ? submittedDelays?.frames ?? [:] : [:]

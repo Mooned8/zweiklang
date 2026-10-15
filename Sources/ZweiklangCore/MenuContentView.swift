@@ -333,7 +333,7 @@ public struct MenuContentView: View {
     private var timingSection: some View {
         DisclosureGroup(isExpanded: $showsTiming) {
             VStack(alignment: .leading, spacing: 10) {
-                T("If an output plays ahead, delay it until the sound is in sync.")
+                T("Zweiklang evens out the delays the devices report. If an output still plays ahead, delay it here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -350,12 +350,13 @@ public struct MenuContentView: View {
             get: { controller.syncOffset(slot: slot) },
             set: { controller.setSyncOffset($0, slot: slot) }
         )
-        let automatic = Int(controller.automaticDelays[slot].rounded())
+        // Total delay this output gets: automatic part plus the slider.
+        let total = Int((controller.automaticDelays[slot] + controller.syncOffset(slot: slot)).rounded())
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(verbatim: controller.displayName(slot: slot)).lineLimit(1).truncationMode(.middle)
                 Spacer()
-                Text(verbatim: "+\(Int(controller.syncOffset(slot: slot))) ms")
+                Text(verbatim: "\(total) ms")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -365,12 +366,26 @@ public struct MenuContentView: View {
                 .controlSize(.small)
                 .accessibilityLabel(Text(verbatim: controller.displayName(slot: slot)))
                 .accessibilityValue(Text(verbatim: "\(Int(controller.syncOffset(slot: slot))) ms"))
-            if automatic > 0 {
-                Text(verbatim: L("+\(String(automatic)) ms added automatically"))
+            if let explanation = timingExplanation(slot) {
+                Text(verbatim: explanation)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Where an output's delay comes from: waiting for a slower output, or being the one the others wait for.
+    private func timingExplanation(_ slot: Int) -> String? {
+        guard let reference = controller.timingReferenceSlot else { return nil }
+        let automatic = String(Int(controller.automaticDelays[slot].rounded()))
+        let manual = String(Int(controller.syncOffset(slot: slot)))
+        if slot == reference {
+            let processing = controller.processingDelays[slot].formatted(.number.precision(.fractionLength(1)))
+            return L("\(automatic) ms automatic + \(manual) ms from you. Plays last because of its own sound processing (\(processing) ms).")
+        }
+        guard controller.automaticDelays[slot] >= 0.5 else { return nil }
+        return L("\(automatic) ms automatic + \(manual) ms from you. Waits for the sound processing of “\(controller.displayName(slot: reference))”.")
     }
 
     private var timingSlots: [Int] { controller.chosenSlots.filter { controller.slotDevices[$0] != nil } }
@@ -379,7 +394,8 @@ public struct MenuContentView: View {
     private var outputControlsHeight: CGFloat {
         var height = CGFloat(controller.chosenSlots.count) * 58 + 40
         if showsTiming {
-            height += 50 + timingSlots.reduce(0) { sum, slot in sum + (controller.automaticDelays[slot] >= 0.5 ? 70 : 56) }
+            let explained = controller.timingReferenceSlot != nil
+            height += 60 + timingSlots.reduce(0) { sum, _ in sum + (explained ? 84 : 56) }
         }
         return height
     }

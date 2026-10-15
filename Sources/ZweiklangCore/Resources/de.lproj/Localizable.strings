@@ -47,8 +47,6 @@
 "Remove output" = "Ausgang entfernen";
 "More than two Bluetooth headphones on one Mac can cause dropouts." = "Mehr als zwei Bluetooth-Kopfhörer am selben Mac können zu Aussetzern führen.";
 "Timing" = "Zeitabgleich";
-"If an output plays ahead, delay it until the sound is in sync." = "Ist ein Ausgang zu früh, verzögere ihn, bis alle gleichzeitig klingen.";
-"+%@ ms added automatically" = "+%@ ms automatisch dazu";
 "Volume keys control all outputs" = "Lautstärketasten steuern alle Ausgänge";
 "Not available: %@. Check that the outputs are connected and switched on." = "Nicht verfügbar: %@. Prüfe, ob die Ausgänge angeschlossen und eingeschaltet sind.";
 
@@ -72,3 +70,6 @@
 "“%@” could not be brought back automatically. It may be playing on another device, such as an iPhone." = "«%@» liess sich nicht automatisch zurückholen. Vielleicht spielt es gerade auf einem anderen Gerät, etwa einem iPhone.";
 "Quit" = "Beenden";
 "Close" = "Schliessen";
+"Zweiklang evens out the delays the devices report. If an output still plays ahead, delay it here." = "Zweiklang gleicht die Verzögerungen aus, die die Geräte melden. Klingt ein Ausgang trotzdem zu früh, verzögere ihn hier.";
+"%@ ms automatic + %@ ms from you. Waits for the sound processing of “%@”." = "%1$@ ms automatisch + %2$@ ms von dir. Wartet auf die Klangverarbeitung von «%3$@».";
+"%@ ms automatic + %@ ms from you. Plays last because of its own sound processing (%@ ms)." = "%1$@ ms automatisch + %2$@ ms von dir. Spielt wegen der eigenen Klangverarbeitung (%3$@ ms) am spätesten.";
