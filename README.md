@@ -67,7 +67,7 @@ Details for contributors and AI agents: [AGENTS.md](AGENTS.md).
 
 ## Auf Deutsch
 
-Zweiklang spielt den Ton des Mac gleichzeitig auf zwei AirPods ab, mit einem eigenen Lautstärkeregler pro Paar. Weitere Kopfhörer oder Lautsprecher lassen sich dazunehmen; spielt einer zu früh, lässt er sich unter «Zeitabgleich» verzögern. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac.
+Zweiklang spielt den Ton des Mac gleichzeitig auf zwei AirPods ab (oder auf mehr Kopfhörern und Lautsprechern), mit einem eigenen Lautstärkeregler pro Gerät und einem Zeitabgleich, damit alle gleichzeitig klingen. Weitere Kopfhörer oder Lautsprecher lassen sich dazunehmen; spielt einer zu früh, lässt er sich unter «Zeitabgleich» verzögern. Installieren: [Zweiklang.dmg](https://github.com/Mooned8/zweiklang/releases/latest/download/Zweiklang.dmg) laden, öffnen, Zweiklang in «Programme» ziehen und starten. Die App übernimmt die Systemsprache des Mac.
 
 ## License
 
