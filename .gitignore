@@ -1,0 +1,9 @@
+# Generated
+build/
+Zweiklang.xcodeproj/
+*.dmg
+.DS_Store
+# Private notes of the maintainer (session journal, local agent config) and archive
+.claude/
+_archiv/
+Sources/Zweiklang/Info.plist

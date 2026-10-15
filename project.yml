@@ -1,0 +1,76 @@
+name: Zweiklang
+options:
+  bundleIdPrefix: ch.moritz
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "1.2"
+    CURRENT_PROJECT_VERSION: "3"
+targets:
+  ZweiklangCore:
+    type: framework
+    platform: macOS
+    sources: [Sources/ZweiklangCore]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.moritz.zweiklang.core
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: CoreAudio.framework
+      - sdk: AudioToolbox.framework
+      - sdk: IOBluetooth.framework
+      - sdk: ServiceManagement.framework
+  Zweiklang:
+    type: application
+    platform: macOS
+    sources: [Sources/Zweiklang]
+    dependencies:
+      - target: ZweiklangCore
+    info:
+      path: Sources/Zweiklang/Info.plist
+      properties:
+        CFBundleDisplayName: Zweiklang
+        CFBundleName: Zweiklang
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.utilities
+        NSBluetoothAlwaysUsageDescription: "Zweiklang connects your paired AirPods so two people can listen at the same time."
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, de, es, fr, it, nl, pt]
+        NSHumanReadableCopyright: "© 2026 Moritz Krummenacher"
+        CFBundleURLTypes:
+          - CFBundleURLName: ch.moritz.zweiklang
+            CFBundleURLSchemes: [zweiklang]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.moritz.zweiklang
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  ZweiklangCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/ZweiklangCoreTests]
+    dependencies:
+      - target: ZweiklangCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.moritz.zweiklang.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Zweiklang:
+    build:
+      targets:
+        Zweiklang: all
+        ZweiklangCoreTests: [test]
+    test:
+      targets: [ZweiklangCoreTests]
