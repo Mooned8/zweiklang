@@ -12,6 +12,11 @@ public final class AppOptions {
     public private(set) var mediaKeysReady = false
     public private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
     public private(set) var launchAtLoginError: String?
+    /// Set by the app: Sparkle lives in the app target, the menu only needs these two actions.
+    public var updates: UpdateActions? {
+        didSet { automaticUpdateChecks = updates?.isAutomatic() ?? false }
+    }
+    public private(set) var automaticUpdateChecks = false
 
     private let defaults: UserDefaults
     @ObservationIgnored private let keyTap = MediaKeyTap()
@@ -103,5 +108,25 @@ public final class AppOptions {
             launchAtLoginError = L("Could not change “Open at login”: \(error.localizedDescription)")
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+}
+
+/// What the menu can do with the updater (Sparkle, owned by the app).
+public struct UpdateActions {
+    public let check: () -> Void
+    public let isAutomatic: () -> Bool
+    public let setAutomatic: (Bool) -> Void
+
+    public init(check: @escaping () -> Void, isAutomatic: @escaping () -> Bool, setAutomatic: @escaping (Bool) -> Void) {
+        self.check = check
+        self.isAutomatic = isAutomatic
+        self.setAutomatic = setAutomatic
+    }
+}
+
+extension AppOptions {
+    public func setAutomaticUpdateChecks(_ enabled: Bool) {
+        updates?.setAutomatic(enabled)
+        automaticUpdateChecks = updates?.isAutomatic() ?? false
     }
 }

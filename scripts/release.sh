@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Builds the download: a signed and notarized build/Zweiklang.dmg.
-# Usage: scripts/release.sh             build, notarize and check the DMG
-#        scripts/release.sh --publish   additionally create the GitHub release v<version> with the DMG
+# Usage: scripts/release.sh                        build, notarize and check the DMG, write the appcast
+#        scripts/release.sh --publish [notes.md]   additionally create the GitHub release v<version>
+#                                                  with Zweiklang.dmg and appcast.xml
 #
 # One-time setup on the release Mac:
 #   1. Xcode > Settings > Accounts > Manage Certificates > + > "Developer ID Application".
@@ -9,6 +10,9 @@
 #        xcrun notarytool store-credentials zweiklang-notary --key AuthKey_<id>.p8 --key-id <id> --issuer <issuer-id>
 #      or with an app-specific password
 #        xcrun notarytool store-credentials zweiklang-notary --apple-id <apple-id> --team-id <team-id>
+#   3. Sparkle update key (EdDSA) in the keychain, account "zweiklang"; its public half is SPARKLE_PUBLIC_KEY
+#      in project.yml. Created once with
+#        build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account zweiklang
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROFILE=${NOTARY_PROFILE:-zweiklang-notary}
@@ -43,6 +47,11 @@ xcodebuild -project Zweiklang.xcodeproj -scheme Zweiklang -derivedDataPath build
 xcodebuild -project Zweiklang.xcodeproj -scheme Zweiklang -configuration Release -derivedDataPath build/DerivedData clean build -quiet
 APP=build/DerivedData/Build/Products/Release/Zweiklang.app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist")
+BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist")
+if [[ -z "$(/usr/libexec/PlistBuddy -c "Print SUPublicEDKey" "$APP/Contents/Info.plist" 2>/dev/null)" ]]; then
+  echo "SUPublicEDKey is empty: installed apps could not verify updates." >&2
+  exit 1
+fi
 scripts/sign.sh "$APP" "$IDENTITY"
 if ! codesign -dv "$APP" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$"; then
   echo "The app is not signed by team $TEAM." >&2
@@ -64,11 +73,37 @@ codesign --force --sign "$IDENTITY" --timestamp build/Zweiklang.dmg
 notarize build/Zweiklang.dmg
 xcrun stapler staple build/Zweiklang.dmg
 
-# 4. Check it the way Gatekeeper will on a friend's Mac.
+# 4. Appcast: tells installed copies about this version. Sparkle checks the EdDSA signature and,
+#    because the app is signed, also that the update comes from the same Developer ID.
+SPARKLE_BIN=build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
+SIGNATURE=$("$SPARKLE_BIN/sign_update" --account zweiklang build/Zweiklang.dmg)
+cat > build/appcast.xml <<APPCAST
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Zweiklang</title>
+    <item>
+      <title>Zweiklang $VERSION</title>
+      <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+      <sparkle:version>$BUILD</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <link>https://github.com/Mooned8/zweiklang/releases/tag/v$VERSION</link>
+      <enclosure url="https://github.com/Mooned8/zweiklang/releases/download/v$VERSION/Zweiklang.dmg" $SIGNATURE type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+APPCAST
+xmllint --noout build/appcast.xml
+
+# 5. Check it the way Gatekeeper will on a friend's Mac.
 spctl --assess --type open --context context:primary-signature -v build/Zweiklang.dmg
 spctl --assess --type execute -v "$APP"
 echo "Ready: build/Zweiklang.dmg (Zweiklang $VERSION, team $TEAM)"
 
 if [[ "${1:-}" == "--publish" ]]; then
-  gh release create "v$VERSION" build/Zweiklang.dmg --title "Zweiklang $VERSION" --generate-notes
+  NOTES=(--generate-notes)
+  [[ -n "${2:-}" ]] && NOTES=(--notes-file "$2")
+  gh release create "v$VERSION" build/Zweiklang.dmg build/appcast.xml --repo Mooned8/zweiklang \
+    --target "$(git rev-parse HEAD)" --title "Zweiklang $VERSION" "${NOTES[@]}"
 fi

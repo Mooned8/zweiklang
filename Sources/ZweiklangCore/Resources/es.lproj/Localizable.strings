@@ -73,3 +73,6 @@
 "Zweiklang evens out the delays the devices report. If an output still plays ahead, delay it here." = "Zweiklang compensa los retrasos que indican los dispositivos. Si una salida sigue sonando antes, retrásala aquí.";
 "%@ ms automatic + %@ ms from you. Waits for the sound processing of “%@”." = "%1$@ ms automáticos + %2$@ ms tuyos. Espera al procesamiento de sonido de «%3$@».";
 "%@ ms automatic + %@ ms from you. Plays last because of its own sound processing (%@ ms)." = "%1$@ ms automáticos + %2$@ ms tuyos. Suena la última por su propio procesamiento de sonido (%3$@ ms).";
+"Check for updates automatically" = "Buscar actualizaciones automáticamente";
+"Check for updates …" = "Buscar actualizaciones …";
+"Zweiklang lives in the menu bar: look for the AirPods icon at the top right. If you can't see it because the menu bar is full, open Zweiklang again from Applications or Spotlight to get this window." = "Zweiklang vive en la barra de menús: busca el icono de los AirPods arriba a la derecha. Si no lo ves porque la barra está llena, vuelve a abrir Zweiklang desde Aplicaciones o Spotlight para ver esta ventana.";

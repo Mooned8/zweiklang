@@ -14,6 +14,14 @@ if [[ "$IDENTITY" != "-" ]]; then
   FLAGS+=(--options runtime --timestamp)
 fi
 
+# Sparkle (updates): its XPC services are only for sandboxed apps; sign its helpers before the framework.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE" ]]; then
+  rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
+  codesign "${FLAGS[@]}" "$SPARKLE/Versions/B/Autoupdate"
+  codesign "${FLAGS[@]}" "$SPARKLE/Versions/B/Updater.app"
+fi
+
 for framework in "$APP"/Contents/Frameworks/*.framework(N); do
   codesign "${FLAGS[@]}" "$framework"
 done

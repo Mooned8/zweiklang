@@ -44,6 +44,8 @@ final class SnapshotTests: XCTestCase {
         try render(MenuContentView(controller: controller, options: options, onQuit: {},
                                    showsTiming: false, showsPairingHelp: true),
                    to: "1c-koppeln-hinweis.png", in: directory)
+        try render(ControlWindowView(controller: controller, options: options, onQuit: {}),
+                   to: "1d-fenster.png", in: directory)
         // TEST_RUNNER_ZWEIKLANG_SNAPSHOT_IDLE_ONLY=1: stop here, before anything touches the sound output.
         if ProcessInfo.processInfo.environment["ZWEIKLANG_SNAPSHOT_IDLE_ONLY"] != nil { return }
         controller.addOutput(OutputTarget(name: "Carla’s AirPods", bluetoothAddress: "AA-BB-CC-DD-EE-03"))

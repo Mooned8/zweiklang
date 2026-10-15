@@ -434,6 +434,14 @@ public struct MenuContentView: View {
                     get: { options.launchAtLogin },
                     set: { options.setLaunchAtLogin($0) }
                 )) { T("Open at login") }
+                if let updates = options.updates {
+                    Divider()
+                    Toggle(isOn: Binding(
+                        get: { options.automaticUpdateChecks },
+                        set: { options.setAutomaticUpdateChecks($0) }
+                    )) { T("Check for updates automatically") }
+                    Button { updates.check() } label: { T("Check for updates …") }
+                }
             } label: {
                 Image(systemName: "gearshape")
             }
@@ -456,7 +464,7 @@ public struct MenuContentView: View {
 }
 
 /// Small tinted box for hints and errors, optionally with one button and a close cross.
-private struct Notice: View {
+struct Notice: View {
     let text: String
     let systemImage: String
     var action: (title: String, run: () -> Void)?

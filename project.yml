@@ -5,6 +5,10 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.4
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -13,8 +17,8 @@ settings:
     CODE_SIGN_STYLE: Manual
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: NO
-    MARKETING_VERSION: "1.4"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "1.5"
+    CURRENT_PROJECT_VERSION: "6"
 targets:
   ZweiklangCore:
     type: framework
@@ -36,6 +40,7 @@ targets:
     sources: [Sources/Zweiklang]
     dependencies:
       - target: ZweiklangCore
+      - package: Sparkle
     info:
       path: Sources/Zweiklang/Info.plist
       properties:
@@ -49,6 +54,10 @@ targets:
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, de, es, fr, it, nl, pt]
         NSHumanReadableCopyright: "© 2026 Moritz Krummenacher"
+        # Updates via Sparkle: feed = appcast.xml attached to the latest GitHub release.
+        SUFeedURL: https://github.com/Mooned8/zweiklang/releases/latest/download/appcast.xml
+        SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
+        SUEnableAutomaticChecks: true
         CFBundleURLTypes:
           - CFBundleURLName: ch.moritz.zweiklang
             CFBundleURLSchemes: [zweiklang]
@@ -56,6 +65,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ch.moritz.zweiklang
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Public half of the EdDSA key that signs updates (private half: maintainer's keychain).
+        SPARKLE_PUBLIC_KEY: "cojWmJrSS0f7B/gZ1XadaXJPeL3zmyvaQNENcCLB9e0="
   ZweiklangCoreTests:
     type: bundle.unit-test
     platform: macOS

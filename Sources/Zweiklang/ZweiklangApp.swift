@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import ZweiklangCore
 
@@ -31,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller: SessionController
     let options: AppOptions
     private let hud: VolumeHUD
+    /// Checks the appcast of the latest GitHub release once a day and installs signed, notarized updates.
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    private lazy var controlWindow = ControlWindow(controller: controller, options: options) { NSApp.terminate(nil) }
 
     override init() {
         controller = SessionController(defaults: .standard, bluetooth: BluetoothConnector())
@@ -38,24 +42,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud = VolumeHUD(controller: controller)
         super.init()
         controller.onVolumeKeyFeedback = { [weak self] in self?.hud.show() }
+        let sparkle = updater.updater
+        options.updates = UpdateActions(
+            check: { [weak self] in
+                NSApp.activate() // Sparkle's window must come to the front for a menu bar app
+                self?.updater.checkForUpdates(nil)
+            },
+            isAutomatic: { sparkle.automaticallyChecksForUpdates },
+            setAutomatic: { sparkle.automaticallyChecksForUpdates = $0 }
+        )
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller.recoverOnLaunch()
+        // Opened by hand (not at login): show the controls in a window, in case the menu bar icon is hidden.
+        if !launchedAtLogin { controlWindow.show() }
+    }
+
+    /// Set while launching when macOS opened the app as a login item.
+    private var launchedAtLogin = false
+
+    /// Opened again from Applications, Spotlight or Launchpad while running: the icon may be hidden
+    /// behind a full menu bar, so offer the controls in a window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        controlWindow.show()
+        return false
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        launchedAtLogin = launchEvent?.eventID == AEEventID(kAEOpenApplication)
+            && launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem)
         // SwiftUI swallows URLs for menu bar apps; take the Apple Event directly.
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleURLEvent(_:withReply:)),
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
     }
 
-    /// zweiklang://start, zweiklang://stop, zweiklang://toggle – for Shortcuts, Siri or the Terminal.
+    /// zweiklang://open, zweiklang://start, zweiklang://stop, zweiklang://toggle – for Shortcuts, Siri or the Terminal.
     @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: text), url.scheme == "zweiklang" else { return }
         switch url.host {
+        case "open": controlWindow.show()
         case "start": Task { await controller.start() }
         case "stop": controller.stop()
         case "toggle":
